@@ -38,8 +38,6 @@ def main():
             else:
                 logging.info("No closed orders returned.")
 
-            update_activation_prices(trailing_state, current_atr)
-            update_stop_prices(trailing_state, current_atr)
             update_trailing_state(trailing_state, current_price, current_atr, current_balance)
 
             logging.info(f"Session complete. Sleeping for {SLEEPING_INTERVAL}s.\n")
@@ -59,11 +57,11 @@ def calculate_atr_value(price, current_atr):
             atr_value = price * ATR_PCT_MIN # ATR below minimum threshold, use minimum threshold
         else:
             atr_value = current_atr
-    return round(atr_value, 1)
+    return atr_value
 
 def process_closed_order(order_id, order, trailing_state, current_atr):
     logging.info(f"Processing order {order_id}...")
-    price = float(order["price"])
+    entry_price = float(order["price"])
     volume = float(order["vol_exec"])
     cost = float(order["cost"])
     side = order["descr"]["type"]
@@ -72,23 +70,18 @@ def process_closed_order(order_id, order, trailing_state, current_atr):
     if pair != "XBTEUR" or side not in ["buy", "sell"]:
         return
 
-    atr_value = calculate_atr_value(price, current_atr)
+    new_side = "buy" if side == "sell" else "sell"
+    atr_value = calculate_atr_value(entry_price, current_atr)
     activation_distance = K_ACT * atr_value
-
-    if side == "buy":
-        new_side = "sell"
-        activation_price = round(price + activation_distance, 1)
-    elif side == "sell":
-        new_side = "buy"
-        activation_price = round(price - activation_distance, 1)
+    activation_price = round(entry_price + activation_distance if side == "sell" else entry_price - activation_distance, 1)
 
     trailing_state[order_id] = {
         "created_time": now_str(),
         "side": new_side,
-        "entry_price": price,
+        "entry_price": entry_price,
         "volume": volume,
         "cost": cost,
-        "activation_atr": atr_value,
+        "activation_atr": round(atr_value, 1),
         "activation_price": activation_price,
         "activation_time": None,
         "trailing_price": None,
@@ -99,111 +92,83 @@ def process_closed_order(order_id, order, trailing_state, current_atr):
     logging.info(f"🆕[CREATE] New trailing position {order_id} for {new_side.upper()} order: activation at {activation_price:,}€")
     save_trailing_state(trailing_state)
 
-def update_activation_prices(trailing_state, current_atr):
-    logging.info("Checking activation prices...")
+def update_trailing_state(trailing_state, current_price, current_atr, current_balance):
+    logging.info(f"Checking trailing positions...")
 
-    for order_id, pos in trailing_state.items():
-        if pos["trailing_price"]:
-            continue  # Skip active trailing positions
+    def calculate_stop_price(side, entry_price, trailing_ref_price, atr_val):
+        raw_stop = K_STOP * atr_val
+        min_margin_eur = entry_price * MIN_MARGIN_PCT
+        
+        if side == "sell":
+            max_space = (trailing_ref_price - entry_price) - min_margin_eur
+        else:
+            max_space = (entry_price - trailing_ref_price) - min_margin_eur
 
+        stop_distance = min(raw_stop, max(0.0, max_space))
+        stop_price = trailing_ref_price - stop_distance if side == "sell" else trailing_ref_price + stop_distance
+
+        return stop_price
+    
+    def recalibrate_activation(order_id, pos, atr_val):
         side = pos["side"]
         entry_price = pos["entry_price"]
 
-        atr_value = calculate_atr_value(entry_price, current_atr)
-        if pos["activation_atr"] * 0.8 < atr_value < pos["activation_atr"] * 1.2:
-            continue  # ATR change within 20%, no update needed
+        activation_distance = K_ACT * atr_val
+        activation_price = entry_price + activation_distance if side == "sell" else entry_price - activation_distance
 
-        activation_distance = K_ACT * atr_value
-        activation_price = round(entry_price + activation_distance if side == "sell" else entry_price - activation_distance, 1)
+        pos.update({
+            "activation_price": round(activation_price, 1),
+            "activation_atr": round(atr_val, 1)
+        })
+        logging.info(f"♻️[ATR] Position {order_id}: recalibrate activation price to {pos['activation_price']:,}€.")
 
-        pos["activation_atr"] = atr_value
-        pos["activation_price"] = activation_price
-        logging.info(f"♻️[ATR] Position {order_id}: updated activation price to {activation_price:,}€ due to ATR change.")
-
-    save_trailing_state(trailing_state)
-
-def update_stop_prices(trailing_state, current_atr):
-    logging.info("Checking stop prices...")
-
-    for order_id, pos in trailing_state.items():
-        if not pos.get("trailing_price"):
-            continue  # Skip inactive trailing positions
-
+    def recalibrate_stop(order_id, pos, atr_val):
         side = pos["side"]
         entry_price = pos["entry_price"]
         trailing_price = pos["trailing_price"]
 
-        atr_value = calculate_atr_value(entry_price, current_atr)
-        if pos["stop_atr"] * 0.8 < atr_value < pos["stop_atr"] * 1.2:
-            continue  # ATR change within 20%, no update needed
-        
-        stop_distance = K_STOP * atr_value
-        candidate_stop = round(trailing_price - stop_distance if side == "sell" else trailing_price + stop_distance, 1)
+        stop_price = calculate_stop_price(side, entry_price, trailing_price, atr_val)
+        pos.update({
+            "stop_price": round(stop_price, 1),
+            "stop_atr": round(atr_val, 1)
+        })
+        logging.info(f"♻️[ATR] Position {order_id}: recalibrate stop price to {pos['stop_price']:,}€.")
 
-        favorable = (side == "sell" and candidate_stop > pos["stop_price"]) or (side == "buy" and candidate_stop < pos["stop_price"])
-        if favorable:
-            logging.info(f"♻️[ATR] Position {order_id}: updated stop price to {candidate_stop:,}€ due to ATR change.")
-            pos["stop_price"] = candidate_stop
-            pos["stop_atr"] = atr_value
-
-    save_trailing_state(trailing_state)
-
-def update_trailing_state(trailing_state, current_price, current_atr, current_balance):
-    logging.info(f"Checking trailing positions...")
-    
-    def update_prices():
-        trailing_price = current_price
-        atr_for_stop = calculate_atr_value(entry_price, current_atr)
-        stop_distance = K_STOP * atr_for_stop
-
-        if side == "sell" :
-            if trailing_price - stop_distance < entry_price * (1 + MIN_MARGIN_PCT):
-                stop_distance = trailing_price - entry_price * (1 + MIN_MARGIN_PCT)
-        elif side == "buy":
-            if trailing_price + stop_distance > entry_price * (1 - MIN_MARGIN_PCT):
-                stop_distance = entry_price * (1 - MIN_MARGIN_PCT) - trailing_price
-
-        stop_price = round(trailing_price - stop_distance if side == "sell" else trailing_price + stop_distance, 1)
-        pos["stop_atr"] = atr_for_stop
-        return trailing_price, stop_price
-
-    def activate_trailing():
-        trailing_price, stop_price = update_prices()
-        pos["activation_time"] = now_str()
-        logging.info(f"⚡[ACTIVE] Trailing activated for position {order_id}: new price at {trailing_price:,}€ | stop at {stop_price:,}€")
-        return trailing_price, stop_price
-    
-    def update_trailing():
-        trailing_price, stop_price = update_prices()
-        logging.info(f"📈[UPDATE] Position {order_id}: updated trailing price to {trailing_price:,}€ | new stop at {stop_price:,}€")
-        return trailing_price, stop_price
-
-    def close_trailing(side):
+    def close_position(order_id, pos):
         try:
+            side = pos["side"]
+            stop_price = pos["stop_price"]
+            volume = pos["volume"]
+            cost = pos["cost"]
             logging.info(f"⛔[CLOSE] Stop price {stop_price:,}€ hit for position {order_id}: placing LIMIT {side.upper()} order")
-            closing_order = place_limit_order("XXBTZEUR", side, current_price, volume)
 
             if side == "sell":
-                pnl = (current_price - entry_price) / entry_price * 100
+                cost = volume * stop_price
+                pnl = (stop_price - pos["entry_price"]) / pos["entry_price"] * 100
             else:
-                pnl = (entry_price - current_price) / entry_price * 100
-            logging.info(f"[PnL] Closed position at {current_price:,}€: {pnl:+.2f}% gain before fees")
+                volume = cost / stop_price
+                pnl = (pos["entry_price"] - stop_price) / pos["entry_price"] * 100
 
-            pos["cost"] = cost
-            pos["volume"] = volume
-            pos["closing_price"] = current_price
-            pos["closing_time"] = now_str()
-            pos["closing_order"] = closing_order
-            pos["pnl"] = round(pnl, 2)
+            closing_order = place_limit_order("XXBTZEUR", side, stop_price, volume)
+            logging.info(f"[PnL] Closed position at {stop_price:,}€: {pnl:+.2f}% gain before fees")
+
+            pos.update({
+                "cost": cost,
+                "volume": volume,
+                "closing_price": stop_price,
+                "closing_time": now_str(),
+                "closing_order": closing_order,
+                "pnl": round(pnl, 2)
+            })
             save_closed_order(trailing_state[order_id], order_id)
             del trailing_state[order_id]
             logging.info(f"Trailing position {order_id} closed and removed.")
         except Exception as e:
             logging.error(f"Failed to close trailing position {order_id}: {e}")
         
-    def can_execute_sell():
-        btc_after_sell = current_balance.get("XXBT") - volume
-        eur_after_sell = current_balance.get("ZEUR") + (volume * current_price)
+    def can_execute_sell(vol_to_sell):
+        btc_after_sell = current_balance.get("XXBT") - vol_to_sell
+        eur_after_sell = current_balance.get("ZEUR") + (vol_to_sell * current_price)
 
         total_value_after = (btc_after_sell * current_price) + eur_after_sell
         if total_value_after == 0: return True
@@ -219,31 +184,44 @@ def update_trailing_state(trailing_state, current_price, current_atr, current_ba
     for order_id, pos in list(trailing_state.items()):
         side = pos["side"]
         entry_price = pos["entry_price"]
-        volume = pos["volume"]
-        cost = pos["cost"]
-        activation_price = pos["activation_price"]
-        trailing_price = pos["trailing_price"]
-        stop_price = pos["stop_price"]
-        
-        if side == "sell" :
-            if not trailing_price and current_price >= activation_price:
-                pos["trailing_price"], pos["stop_price"] = activate_trailing()
-            elif trailing_price:
-                if current_price > trailing_price:
-                    pos["trailing_price"], pos["stop_price"] = update_trailing()
-                if current_price <= stop_price and can_execute_sell():
-                    cost = volume * current_price
-                    close_trailing(side)
+        trailing_active = pos["trailing_price"] is not None
+        atr_val = calculate_atr_value(entry_price, current_atr)
 
-        elif side == "buy":
-            if not trailing_price and current_price <= activation_price:
-                pos["trailing_price"], pos["stop_price"] = activate_trailing()
-            elif trailing_price:
-                if current_price < trailing_price:
-                    pos["trailing_price"], pos["stop_price"] = update_trailing()
-                if current_price >= stop_price:
-                    volume = cost / current_price
-                    close_trailing(side)
+        if not trailing_active:
+            if pos["activation_atr"] * 0.8 > atr_val or atr_val > pos["activation_atr"] * 1.2:
+                recalibrate_activation(order_id, pos, atr_val)
+
+            if (side == "sell" and current_price >= pos["activation_price"]) or \
+               (side == "buy" and current_price <= pos["activation_price"]):
+                
+                stop_price = calculate_stop_price(side, entry_price, current_price, atr_val)
+                pos.update({
+                    "trailing_price": current_price,
+                    "stop_price": round(stop_price, 1),
+                    "stop_atr": round(atr_val, 1),
+                    "activation_time": now_str()
+                })
+                logging.info(f"⚡[ACTIVE] Trailing activated for position {order_id}: New price {pos['trailing_price']:,}€ | Stop {pos['stop_price']:,}€")
+        else:
+            if pos["stop_atr"] * 0.8 > atr_val or atr_val > pos["stop_atr"] * 1.2:
+                recalibrate_stop(order_id, pos, atr_val)
+
+            if (side == "sell" and current_price <= pos["stop_price"] and can_execute_sell(pos["volume"])) or \
+               (side == "buy" and current_price >= pos["stop_price"]):
+                
+                close_position(order_id, pos)
+                continue 
+
+            if (side == "sell" and current_price > pos["trailing_price"]) or \
+               (side == "buy" and current_price < pos["trailing_price"]):
+                
+                stop_price = calculate_stop_price(side, entry_price, current_price, atr_val)
+                pos.update({
+                    "trailing_price": current_price,
+                    "stop_price": round(stop_price, 1),
+                    "stop_atr": round(atr_val, 1)
+                })
+                logging.info(f"📈[TRAIL] Position {order_id}: New price {pos['trailing_price']:,}€ | Stop {pos['stop_price']:,}€")
     
     save_trailing_state(trailing_state)
 
