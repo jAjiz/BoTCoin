@@ -1,7 +1,7 @@
-import logging
 import threading
 import time
 from config import TELEGRAM_TOKEN, ALLOWED_USER_ID
+from logger import log_error, log_info
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
 
@@ -54,15 +54,20 @@ class TelegramInterface:
             url = f"https://api.telegram.org/bot{self.token}/sendMessage"
             requests.post(url, json={"chat_id": self.user_id, "text": message})
         except Exception as e:
-            logging.error(f"Telegram send error: {e}")
+            log_error(f"Telegram send error: {e}")
 
     def run(self):
-        self.app.add_handler(CommandHandler("status", self.status_command))
-        self.app.add_handler(CommandHandler("pause", self.pause_command))
-        self.app.add_handler(CommandHandler("resume", self.resume_command))
-        self.app.add_handler(CommandHandler("logs", self.logs_command))
-        
-        self.app.run_polling()
+        log_info("Starting Telegram interface...")
+        try:
+            self.app.add_handler(CommandHandler("status", self.status_command))
+            self.app.add_handler(CommandHandler("pause", self.pause_command))
+            self.app.add_handler(CommandHandler("resume", self.resume_command))
+            self.app.add_handler(CommandHandler("logs", self.logs_command))
+            
+            log_info("Executing run polling...")
+            self.app.run_polling()
+        except Exception as e:
+            log_error(f"Telegram interface error: {e}")
 
 tg_interface = TelegramInterface(TELEGRAM_TOKEN, ALLOWED_USER_ID)
 
