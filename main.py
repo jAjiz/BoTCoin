@@ -18,7 +18,6 @@ MIN_BTC_ALLOCATION_PCT = 0.60
 def main():
     try:
         telegram_interface.start_telegram_thread()
-        log_info("🤖 BoTC started and running. Use /status, /pause, /resume or /logs.", to_telegram=True)
 
         while True:
             if telegram_interface.BOT_PAUSED:

@@ -22,7 +22,16 @@ class TelegramInterface:
         self.token = token
         self.user_id = user_id
         self.app = ApplicationBuilder().token(token).build()
-
+    
+    async def send_startup_message(self):
+        try:
+            await self.app.bot.send_message(
+                chat_id=self.user_id,
+                text="🤖 BoTC started and running. Use /status, /pause, /resume or /logs."
+            )
+        except Exception as e:
+            logging.error(f"Failed to send startup message: {e}")
+    
     async def status_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.effective_user.id != self.user_id: return
         status = "⏸ PAUSED" if BOT_PAUSED else "▶️ RUNNING"
@@ -90,6 +99,9 @@ class TelegramInterface:
             self.app.add_handler(CommandHandler("resume", self.resume_command))
             self.app.add_handler(CommandHandler("logs", self.logs_command))
             self.app.add_handler(CommandHandler("positions", self.positions_command))
+
+            # Send startup message before starting polling
+            loop.run_until_complete(self.send_startup_message())
 
             self.app.run_polling(
                 poll_interval=POLL_INTERVAL_SEC, 
