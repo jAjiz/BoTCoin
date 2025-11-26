@@ -1,6 +1,6 @@
 import time
 import log_controller as logging
-import telegram_interface as telegram
+# import telegram_interface as telegram
 from kraken_client import get_balance, get_closed_orders, get_current_price, place_limit_order, get_current_atr
 from trailing_controller import load_trailing_state, save_trailing_state, is_processed, save_closed_order
 
@@ -16,13 +16,13 @@ MIN_BTC_ALLOCATION_PCT = 0.60
 
 def main():
     try:
-        telegram.start_telegram_thread()
+        # telegram.start_telegram_thread()
 
-        while True:
-            if telegram.BOT_PAUSED:
-                logging.info("Bot is paused. Sleeping...")
-                time.sleep(SLEEPING_INTERVAL)
-                continue
+        # while True:
+        #     if telegram.BOT_PAUSED:
+        #         logging.info("Bot is paused. Sleeping...")
+        #         time.sleep(SLEEPING_INTERVAL)
+        #         continue
 
             logging.info("======== STARTING SESSION ========")
             current_price = get_current_price("XXBTZEUR")
