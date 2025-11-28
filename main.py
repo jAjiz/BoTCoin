@@ -1,6 +1,6 @@
 import time
 import core.logging as logging
-# import services.telegram as telegram
+import services.telegram as telegram
 from exchange.kraken import get_balance, get_closed_orders, get_current_price, place_limit_order, get_current_atr
 from core.state import load_trailing_state, save_trailing_state, is_processed, save_closed_order
 import strategies.multipliers as multipliers_mode
@@ -12,13 +12,13 @@ MODE = "rebuy"  # Options: "multipliers", "rebuy"
 
 def main():
     try:
-        # telegram.start_telegram_thread()
+        telegram.start_telegram_thread()
 
         while True:
-        #     if telegram.BOT_PAUSED:
-        #         logging.info("Bot is paused. Sleeping...")
-        #         time.sleep(SLEEPING_INTERVAL)
-        #         continue
+            if telegram.BOT_PAUSED:
+                logging.info("Bot is paused. Sleeping...")
+                time.sleep(SLEEPING_INTERVAL)
+                continue
 
             logging.info("======== STARTING SESSION ========")
             current_price = get_current_price("XXBTZEUR")
