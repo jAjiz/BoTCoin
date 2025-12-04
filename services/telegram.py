@@ -1,10 +1,4 @@
-import threading
-import time
-import logging
-import asyncio
-import json
-import sys
-import os
+import threading, time, logging, asyncio, json, sys, os, subprocess, requests
 from exchange.kraken import get_current_price, get_current_atr, get_balance
 from core.config import TELEGRAM_TOKEN, ALLOWED_USER_ID, MODE
 from telegram import Update
@@ -174,9 +168,7 @@ class TelegramInterface:
         try:
             if self._loop and self._loop.is_running():
                 asyncio.run_coroutine_threadsafe(self.send_message_async(message), self._loop)
-            else:
-                # Fallback to requests if loop not available
-                import requests
+            else:                
                 url = f"https://api.telegram.org/bot{self.token}/sendMessage"
                 requests.post(url, json={"chat_id": self.user_id, "text": message}, timeout=10)
         except Exception as e:
@@ -185,15 +177,26 @@ class TelegramInterface:
     async def restart_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not self._check_auth(update): return
         try:
-            await update.message.reply_text("🔄 Reiniciando BoTC...")
+            await update.message.reply_text("🔄 Restarting BoTC...")
             logging.info("Restart command initiated by user")
             
-            await asyncio.sleep(1)
+            # Stop telegram bot gracefully
+            await self.app.stop()
+            await self.app.shutdown()
             
-            os.execv(sys.executable, [sys.executable] + sys.argv)
+            await asyncio.sleep(0.5)
+            
+            # Restart using subprocess
+            subprocess.Popen([sys.executable] + sys.argv)
+
+            await asyncio.sleep(0.5)
+            
+            # Exit the current process
+            os._exit(0)
+
         except Exception as e:
             logging.error(f"Error in restart_command: {e}")
-            await update.message.reply_text(f"❌ Error al reiniciar: {e}")
+            await update.message.reply_text(f"❌ Error restarting: {e}")
 
     def run(self):
         # New event loop for this secondary thread
