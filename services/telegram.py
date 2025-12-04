@@ -133,7 +133,7 @@ class TelegramInterface:
                     trailing_price = pos['trailing_price']
                     stop_price = pos['stop_price']
                     entry_price = pos['entry_price']
-                    pnl_pct = ((current_price - entry_price) / entry_price * 100) if pos['side'] == 'buy' else ((entry_price - current_price) / entry_price * 100)
+                    pnl_pct = ((stop_price - entry_price) / entry_price * 100) if pos['side'] == 'buy' else ((entry_price - stop_price) / entry_price * 100)
                     pnl_symbol = "🟢" if pnl_pct > 0 else "🔴"
                 else:
                     trailing_price = "Not active"

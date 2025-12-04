@@ -29,7 +29,7 @@ def main():
 
             trailing_state = load_trailing_state()   
             
-            one_session_ago = int(time.time()) - SLEEPING_INTERVAL
+            one_session_ago = int(time.time()) - SLEEPING_INTERVAL * 2
             one_week_ago = int(time.time()) - (60 * 60 * 24 * 7)
 
             closed_orders = get_closed_orders(one_week_ago, one_session_ago)
@@ -78,17 +78,28 @@ def process_closed_order(order_id, order, trailing_state, current_atr):
         "activation_price": round(activation_price, 1)
     }
 
-    logging.info(f"🆕[CREATE] New trailing position {order_id} for {new_side.upper()} order: activation at {trailing_state[order_id]['activation_price']:,}€", to_telegram=True)
+    logging.info(f"🆕[CREATE] New trailing position {order_id} for {new_side.upper()} order: activation at {trailing_state[order_id]['activation_price']:,}€",
+                  to_telegram=True)
     save_trailing_state(trailing_state)
 
 def update_trailing_state(trailing_state, current_price, current_atr, current_balance):
     logging.info(f"Checking trailing positions...")
 
-    def calculate_stop_price(side, entry_price, trailing_price, atr_val):
+    def calculate_stop_price(order_id, pos, entry_price, trailing_price):
+        side = pos["side"]
+        atr_val = pos["stop_atr"]
+
         if MODE == "multipliers":
-            return multipliers_mode.calculate_stop_price(side, entry_price, trailing_price, atr_val)
+            stop_price = multipliers_mode.calculate_stop_price(side, entry_price, trailing_price, atr_val)
         elif MODE == "rebuy":
-            return rebuy_mode.calculate_stop_price(side, trailing_price, atr_val)
+            stop_price = rebuy_mode.calculate_stop_price(side, trailing_price, atr_val)
+        
+        pos.update({
+            "trailing_price": current_price,
+            "stop_price": round(stop_price, 1)
+        })
+        logging.info(f"📈[TRAIL] Position {order_id}: New price {pos['trailing_price']:,}€ | Stop {pos['stop_price']:,}€")
+
     
     def recalibrate_activation(order_id, pos, atr_val):
         side = pos["side"]
@@ -125,7 +136,7 @@ def update_trailing_state(trailing_state, current_price, current_atr, current_ba
             stop_price = pos["stop_price"]
             volume = pos["volume"]
             cost = pos["cost"]
-            logging.warning(f"⛔[CLOSE] Stop price {stop_price:,}€ hit for position {order_id}: placing LIMIT {side.upper()} order", to_telegram=True)
+            logging.info(f"⛔[CLOSE] Stop price {stop_price:,}€ hit for position {order_id}: placing LIMIT {side.upper()} order", to_telegram=True)
 
             if side == "sell":
                 cost = volume * stop_price
@@ -138,8 +149,8 @@ def update_trailing_state(trailing_state, current_price, current_atr, current_ba
             logging.info(f"[PnL] Closed position: {pnl:+.2f}% gain before fees", to_telegram=True)
 
             pos.update({
-                "cost": cost,
-                "volume": volume,
+                "cost": round(cost, 5),
+                "volume": round(volume, 8),
                 "closing_time": now_str(),
                 "closing_order": closing_order,
                 "pnl": round(pnl, 2)
@@ -163,14 +174,14 @@ def update_trailing_state(trailing_state, current_price, current_atr, current_ba
             if (side == "sell" and current_price >= pos["activation_price"]) or \
                (side == "buy" and current_price <= pos["activation_price"]):
                 
-                stop_price = calculate_stop_price(side, entry_price, current_price, pos["activation_atr"])
+                logging.info(f"⚡[ACTIVE] Trailing activated for position {order_id})", to_telegram=True)
                 pos.update({
-                    "trailing_price": current_price,
-                    "stop_price": round(stop_price, 1),
-                    "stop_atr": round(pos["activation_atr"], 1),
+                    "stop_atr": pos["activation_atr"],
                     "activation_time": now_str()
                 })
-                logging.info(f"⚡[ACTIVE] Trailing activated for position {order_id}: New price {pos['trailing_price']:,}€ | Stop {pos['stop_price']:,}€", to_telegram=True)
+
+                calculate_stop_price(order_id, pos, entry_price, current_price)
+
         else:
             if (pos["stop_atr"] * 0.8 > atr_val or atr_val > pos["stop_atr"] * 1.2) and MODE == "multipliers":
                 recalibrate_stop(order_id, pos, atr_val)
@@ -187,12 +198,7 @@ def update_trailing_state(trailing_state, current_price, current_atr, current_ba
             if (side == "sell" and current_price > pos["trailing_price"]) or \
                (side == "buy" and current_price < pos["trailing_price"]):
                 
-                stop_price = calculate_stop_price(side, entry_price, current_price, pos["stop_atr"])
-                pos.update({
-                    "trailing_price": current_price,
-                    "stop_price": round(stop_price, 1)
-                })
-                logging.info(f"📈[TRAIL] Position {order_id}: New price {pos['trailing_price']:,}€ | Stop {pos['stop_price']:,}€", to_telegram=True)
+                calculate_stop_price(order_id, pos, entry_price, current_price)
     
     save_trailing_state(trailing_state)
 
