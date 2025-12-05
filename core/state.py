@@ -33,4 +33,8 @@ def save_closed_position(pos, order_id):
             json.dump({order_id: pos}, f, indent=2)
 
 def is_processed(order_id, state):
-    return order_id in state.keys()
+    for pos in state.values():
+        opening_orders = pos.get("opening_order")
+        if opening_orders and order_id in opening_orders:
+            return True
+    return False
