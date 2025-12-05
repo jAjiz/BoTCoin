@@ -76,19 +76,17 @@ def process_closed_order(order_id, order, trailing_state, current_atr):
     
     if existing_position:
         existing_id, existing_pos = existing_position
-        
-        new_volume = existing_pos["volume"] + volume
-        new_cost = existing_pos["cost"] + cost
-        
-        opening_orders = existing_pos.get("opening_order", [])
-        if isinstance(opening_orders, list):
-            opening_orders.append(order_id)
+
+        if new_side == "sell":
+            new_volume = existing_pos["volume"] + volume
+            new_cost = new_volume * existing_pos["entry_price"]
         else:
-            opening_orders = [opening_orders, order_id]
+            new_cost = existing_pos["cost"] + cost
+            new_volume = new_cost / existing_pos["entry_price"]
         
         existing_pos["volume"] = round(new_volume, 8)
-        existing_pos["cost"] = round(new_cost, 5)
-        existing_pos["opening_order"] = opening_orders
+        existing_pos["cost"] = round(new_cost, 2)
+        existing_pos["opening_order"].append(order_id)
         
         logging.info(
             f"🔀[MERGE] Unified order {order_id} into existing position {existing_id}: "
@@ -103,7 +101,7 @@ def process_closed_order(order_id, order, trailing_state, current_atr):
             "side": new_side,
             "entry_price": entry_price,
             "volume": volume,
-            "cost": cost,
+            "cost": round(cost, 2),
             "activation_atr": round(atr_value, 1),
             "activation_price": round(activation_price, 1)
         }
@@ -184,7 +182,7 @@ def update_trailing_state(trailing_state, current_price, current_atr, current_ba
             logging.info(f"[PnL] Closed position: {pnl:+.2f}% gain before fees", to_telegram=True)
 
             pos.update({
-                "cost": round(cost, 5),
+                "cost": round(cost, 2),
                 "volume": round(volume, 8),
                 "closing_time": now_str(),
                 "pnl": round(pnl, 2)
