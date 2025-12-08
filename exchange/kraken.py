@@ -1,5 +1,8 @@
 import krakenex
 import logging
+import pandas as pd
+import os
+from datetime import datetime, timedelta
 from pykrakenapi import KrakenAPI
 from core.config import KRAKEN_API_KEY, KRAKEN_API_SECRET
 
@@ -11,6 +14,9 @@ api = krakenex.API()
 api.key = KRAKEN_API_KEY
 api.secret = KRAKEN_API_SECRET
 krakenapi = KrakenAPI(api)
+
+ATR_FILE = "data/atr_data_15min.csv"
+ATR_DATA_DAYS = 60
 
 def get_balance():
     try:
@@ -105,19 +111,43 @@ def cancel_order(order_id):
     
 def get_current_atr(interval=15, period=14):
     try:
-        df, _ = krakenapi.get_ohlc_data("XXBTZEUR", interval=interval)
+        since_param = None
+        existing_df = None
+        
+        if os.path.exists(ATR_FILE):
+            try:
+                existing_df = pd.read_csv(ATR_FILE, index_col=0, parse_dates=True)
+                if not existing_df.empty:
+                    last_timestamp = int(existing_df.index[-1].timestamp())
+                    since_param = last_timestamp
+            except Exception as e:
+                existing_df = None
+        
+        df, _ = krakenapi.get_ohlc_data("XXBTZEUR", interval=interval, since=since_param)
         df = df.sort_index()
-
-        df["H-L"]  = df["high"] - df["low"]
+        
+        if existing_df is not None and not existing_df.empty:
+            df = pd.concat([existing_df, df])
+            df = df[~df.index.duplicated(keep='last')]
+            df = df.sort_index()
+        
+        cutoff_date = datetime.now() - timedelta(days=ATR_DATA_DAYS)
+        df = df[df.index >= cutoff_date]
+        
+        df["H-L"] = df["high"] - df["low"]
         df["H-PC"] = (df["high"] - df["close"].shift(1)).abs()
         df["L-PC"] = (df["low"] - df["close"].shift(1)).abs()
         df["TR"] = df[["H-L", "H-PC", "L-PC"]].max(axis=1)
-        df["ATR"] = df["TR"].rolling(period).mean()
-
-        return df["ATR"].iloc[-1]
+        df["ATR"] = df["TR"].rolling(period).mean()       
+        df.to_csv(ATR_FILE)
+        
+        current_atr = df["ATR"].iloc[-1]
+        return current_atr
+        
     except Exception as e:
         logging.error(f"Error getting ATR: {e}")
         return None
 
 if __name__ == "__main__":
     print(get_balance())
+    print(get_current_atr())
