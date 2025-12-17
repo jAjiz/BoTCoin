@@ -1,8 +1,8 @@
 import time
 import core.logging as logging
 import services.telegram as telegram
-import strategies.multipliers as multipliers_mode
-import strategies.rebuy as rebuy_mode
+import strategies.dualk as dualk_mode
+import strategies.onek as onek_mode
 from exchange.kraken import build_pairs_map, get_balance, get_last_price, get_current_atr, get_closed_orders, place_limit_order
 from core.state import load_trailing_state, save_trailing_state, is_processed, save_closed_position
 from core.config import PAIRS, SLEEPING_INTERVAL, MODE, ASSET_MIN_ALLOCATION
@@ -84,10 +84,10 @@ def process_closed_order(order_id, order, pair_state, current_atr, pair):
     if side not in ["buy", "sell"]:
         return
 
-    if MODE == "multipliers":
-        new_side, atr_value, activation_price = multipliers_mode.process_order(side, entry_price, current_atr, pair)
-    elif MODE == "rebuy":
-        new_side, atr_value, activation_price = rebuy_mode.process_order(side, entry_price, current_atr, pair)
+    if MODE == "onek":
+        new_side, atr_value, activation_price = onek_mode.process_order(side, entry_price, current_atr, pair)
+    elif MODE == "dualk":
+        new_side, atr_value, activation_price = dualk_mode.process_order(side, entry_price, current_atr, pair)
 
     existing_position = None
     for existing_id, pos in list(pair_state.items()):
@@ -144,10 +144,10 @@ def update_trailing_state(pair_state, pair, current_price, current_atr, current_
         side = pos["side"]
         atr_val = pos["stop_atr"]
 
-        if MODE == "multipliers":
-            stop_price = multipliers_mode.calculate_stop_price(side, entry_price, trailing_price, atr_val, pair)
-        elif MODE == "rebuy":
-            stop_price = rebuy_mode.calculate_stop_price(side, trailing_price, atr_val, pair)
+        if MODE == "onek":
+            stop_price = onek_mode.calculate_stop_price(side, trailing_price, atr_val, pair)
+        elif MODE == "dualk":
+            stop_price = dualk_mode.calculate_stop_price(side, entry_price, trailing_price, atr_val, pair)
         
         pos.update({
             "trailing_price": current_price,
@@ -160,10 +160,10 @@ def update_trailing_state(pair_state, pair, current_price, current_atr, current_
         side = pos["side"]
         entry_price = pos["entry_price"]
 
-        if MODE == "multipliers":
-            activation_distance = multipliers_mode.calculate_activation_dist(atr_val, pair)
-        elif MODE == "rebuy":
-            activation_distance = rebuy_mode.calculate_activation_dist(side, atr_val, entry_price, pair)
+        if MODE == "onek":
+            activation_distance = onek_mode.calculate_activation_dist(side, atr_val, entry_price, pair)
+        elif MODE == "dualk":
+            activation_distance = dualk_mode.calculate_activation_dist(side, atr_val, pair)
 
         activation_price = entry_price + activation_distance if side == "sell" else entry_price - activation_distance
 
@@ -178,10 +178,10 @@ def update_trailing_state(pair_state, pair, current_price, current_atr, current_
         entry_price = pos["entry_price"]
         trailing_price = pos["trailing_price"]
 
-        if MODE == "multipliers":
-            stop_price = multipliers_mode.calculate_stop_price(side, entry_price, trailing_price, atr_val, pair)
-        elif MODE == "rebuy":
-            stop_price = rebuy_mode.calculate_stop_price(side, trailing_price, atr_val, pair)
+        if MODE == "onek":
+            stop_price = onek_mode.calculate_stop_price(side, trailing_price, atr_val, pair)
+        elif MODE == "dualk":
+            stop_price = dualk_mode.calculate_stop_price(side, entry_price, trailing_price, atr_val, pair)
 
         pos.update({
             "stop_price": round(stop_price, 1),
@@ -248,7 +248,9 @@ def update_trailing_state(pair_state, pair, current_price, current_atr, current_
         side = pos["side"]
         entry_price = pos["entry_price"]
         trailing_active = pos.get("trailing_price") is not None
-        atr_val = multipliers_mode.calculate_atr_value(entry_price, current_atr, pair) if MODE == "multipliers" else current_atr
+        atr_val = current_atr 
+        if MODE == "dualk":
+            atr_val = dualk_mode.calculate_atr_value(side, entry_price, current_atr, pair)
 
         if not trailing_active:
             if pos["activation_atr"] * 0.8 > atr_val or atr_val > pos["activation_atr"] * 1.2:
