@@ -26,6 +26,8 @@ def validate_common_params(errors):
         errors.append("TELEGRAM_TOKEN is missing")
     if not ALLOWED_USER_ID:
         errors.append("ALLOWED_USER_ID is missing")
+    elif not ALLOWED_USER_ID.isdigit() or int(ALLOWED_USER_ID) <= 0:
+        errors.append("ALLOWED_USER_ID must be a positive integer")
 
     if not MODE:
         errors.append("MODE is missing")

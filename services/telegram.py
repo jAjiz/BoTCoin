@@ -254,7 +254,7 @@ tg_interface = None
 
 def initialize_telegram():
     global tg_interface
-    tg_interface = TelegramInterface(TELEGRAM_TOKEN, ALLOWED_USER_ID)
+    tg_interface = TelegramInterface(TELEGRAM_TOKEN, int(ALLOWED_USER_ID))
     t = threading.Thread(target=tg_interface.run, daemon=True)
     t.start()
     
