@@ -250,13 +250,18 @@ class TelegramInterface:
             self._loop = None
             logging.info("Telegram thread has exited.")
 
-tg_interface = TelegramInterface(TELEGRAM_TOKEN, ALLOWED_USER_ID)
+tg_interface = None
 
-def start_telegram_thread():
+def initialize_telegram():
+    global tg_interface
+    tg_interface = TelegramInterface(TELEGRAM_TOKEN, ALLOWED_USER_ID)
     t = threading.Thread(target=tg_interface.run, daemon=True)
     t.start()
-
+    
 def send_notification(msg):
+    if tg_interface is None:
+        logging.warning("Telegram not initialized. Message not sent: " + msg)
+        return
     tg_interface.send_message(msg)
 
 def stop_telegram_thread():

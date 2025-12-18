@@ -1,20 +1,21 @@
 import time
+import sys
 import core.logging as logging
 import services.telegram as telegram
 import strategies.dualk as dualk_mode
 import strategies.onek as onek_mode
-from exchange.kraken import build_pairs_map, get_balance, get_last_price, get_current_atr, get_closed_orders, place_limit_order
+from exchange.kraken import get_balance, get_last_price, get_current_atr, get_closed_orders, place_limit_order
 from core.state import load_trailing_state, save_trailing_state, is_processed, save_closed_position
 from core.config import PAIRS, SLEEPING_INTERVAL, MODE, ASSET_MIN_ALLOCATION
+from core.validation import validate_config
 
 def main():
+    # Validate configuration before starting
+    if not validate_config():
+        sys.exit(1)
+    
     try:
-        telegram.start_telegram_thread()
-        build_pairs_map(PAIRS)
-
-        if not PAIRS:
-            logging.error("No valid pairs configured. Exiting.", to_telegram=True)
-            return
+        telegram.initialize_telegram()
 
         while True:
             if telegram.BOT_PAUSED:

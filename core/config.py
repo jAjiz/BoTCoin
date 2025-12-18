@@ -9,7 +9,7 @@ KRAKEN_API_SECRET = os.getenv("KRAKEN_API_SECRET")
 
 # Telegram Bot Credentials
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-ALLOWED_USER_ID = int(os.getenv("ALLOWED_USER_ID"))
+ALLOWED_USER_ID = os.getenv("ALLOWED_USER_ID")
 POLL_INTERVAL_SEC = int(os.getenv("POLL_INTERVAL_SEC", 20))
 
 # Bot Settings
@@ -21,41 +21,45 @@ ATR_DATA_DAYS = int(os.getenv("ATR_DATA_DAYS", 60)) # 60 days
 PAIRS = {pair: {} for pair in os.getenv("PAIRS", "").split(",")}
 
 # Trading params - defaults (can be overridden per pair)
-DEFAULT_SELL_K_ACT = float(os.getenv("SELL_K_ACT", -1))
-DEFAULT_SELL_K_STOP = float(os.getenv("SELL_K_STOP", -1))
-DEFAULT_SELL_MIN_MARGIN = float(os.getenv("SELL_MIN_MARGIN", 0))
+SELL_K_ACT = float(os.getenv("SELL_K_ACT", -1))
+SELL_K_STOP = float(os.getenv("SELL_K_STOP", -1))
+SELL_MIN_MARGIN = float(os.getenv("SELL_MIN_MARGIN", -1))
 
-DEFAULT_BUY_K_ACT = float(os.getenv("BUY_K_ACT", -1))
-DEFAULT_BUY_K_STOP = float(os.getenv("BUY_K_STOP", -1))
-DEFAULT_BUY_MIN_MARGIN = float(os.getenv("BUY_MIN_MARGIN", 0))
+BUY_K_ACT = float(os.getenv("BUY_K_ACT", -1))
+BUY_K_STOP = float(os.getenv("BUY_K_STOP", -1))
+BUY_MIN_MARGIN = float(os.getenv("BUY_MIN_MARGIN", -1))
 
 def _build_trading_params():
     params = {}
     for pair in PAIRS.keys():
-        sell_k_act = float(os.getenv(f"{pair}_SELL_K_ACT", DEFAULT_SELL_K_ACT))
-        sell_k_stop = float(os.getenv(f"{pair}_SELL_K_STOP", DEFAULT_SELL_K_STOP))
-        sell_min_margin = float(os.getenv(f"{pair}_SELL_MIN_MARGIN", DEFAULT_SELL_MIN_MARGIN))
-        sell_atr_min = sell_min_margin / (sell_k_act - sell_k_stop) if (sell_k_act - sell_k_stop) > 0 else 0
-
-        buy_k_act = float(os.getenv(f"{pair}_BUY_K_ACT", DEFAULT_BUY_K_ACT))
-        buy_k_stop = float(os.getenv(f"{pair}_BUY_K_STOP", DEFAULT_BUY_K_STOP))
-        buy_min_margin = float(os.getenv(f"{pair}_BUY_MIN_MARGIN", DEFAULT_BUY_MIN_MARGIN))
-        buy_atr_min = buy_min_margin / (buy_k_act - buy_k_stop) if (buy_k_act - buy_k_stop) > 0 else 0
-
-        params[pair] = {
-            "sell": {
-                "K_ACT": sell_k_act,
-                "K_STOP": sell_k_stop,
-                "MIN_MARGIN": sell_min_margin,
-                "ATR_MIN": sell_atr_min
-            },
-            "buy": {
-                "K_ACT": buy_k_act,
-                "K_STOP": buy_k_stop,
-                "MIN_MARGIN": buy_min_margin,
-                "ATR_MIN": buy_atr_min
+        if MODE == "onek":
+            # OneK mode: only needs K_STOP and MIN_MARGIN
+            params[pair] = {
+                "sell": {
+                    "K_STOP": float(os.getenv(f"{pair}_SELL_K_STOP", SELL_K_STOP)),
+                    "MIN_MARGIN": float(os.getenv(f"{pair}_SELL_MIN_MARGIN", SELL_MIN_MARGIN))
+                },
+                "buy": {
+                    "K_STOP": float(os.getenv(f"{pair}_BUY_K_STOP", BUY_K_STOP)),
+                    "MIN_MARGIN": float(os.getenv(f"{pair}_BUY_MIN_MARGIN", BUY_MIN_MARGIN))
+                }
             }
-        }
+        else:  # MODE == "dualk"
+            # DualK mode: needs K_ACT, K_STOP, MIN_MARGIN, and ATR_MIN 
+            params[pair] = {
+                "sell": {
+                    "K_ACT": float(os.getenv(f"{pair}_SELL_K_ACT", SELL_K_ACT)),
+                    "K_STOP": float(os.getenv(f"{pair}_SELL_K_STOP", SELL_K_STOP)),
+                    "MIN_MARGIN": float(os.getenv(f"{pair}_SELL_MIN_MARGIN", SELL_MIN_MARGIN)),
+                    "ATR_MIN": None  # Calculated in validation.py
+                },
+                "buy": {
+                    "K_ACT": float(os.getenv(f"{pair}_BUY_K_ACT", BUY_K_ACT)),
+                    "K_STOP": float(os.getenv(f"{pair}_BUY_K_STOP", BUY_K_STOP)),
+                    "MIN_MARGIN": float(os.getenv(f"{pair}_BUY_MIN_MARGIN", BUY_MIN_MARGIN)),
+                    "ATR_MIN": None  # Calculated in validation.py
+                }
+            }
 
     return params
 
