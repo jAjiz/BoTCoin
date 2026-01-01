@@ -328,8 +328,8 @@ class TelegramInterface:
         except Exception as e:
             logging.error(f"Telegram thread error: {e}")
         finally:
-            self._running = False
             self._executor.shutdown(wait=True, cancel_futures=False)
+            self._running = False
             try:
                 # Cancel remaining tasks
                 pending = asyncio.all_tasks(loop)
