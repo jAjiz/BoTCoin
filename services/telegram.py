@@ -55,21 +55,11 @@ class TelegramInterface:
         self.app = ApplicationBuilder().token(token).build()
         self._message_queue = Queue()  # Thread-safe queue for sync-to-async messaging
         self._running = False
-        self._executor = ThreadPoolExecutor(max_workers=3)  # For blocking I/O operations
+        self._executor = None  # Initialized in run() when thread starts
     
     def _check_auth(self, update: Update) -> bool:
         """Verify that the command comes from the authorized user."""
         return update.effective_user.id == self.user_id
-    
-    async def send_startup_message(self):
-        """Send welcome message when bot starts."""
-        try:
-            await self.app.bot.send_message(
-                chat_id=self.user_id,
-                text="🤖 BoTC started and running. Use /help to see available commands."
-            )
-        except Exception as e:
-            logging.error(f"Failed to send startup message: {e}")
     
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Show available bot commands."""
@@ -185,6 +175,10 @@ class TelegramInterface:
             except FileNotFoundError:
                 await update.message.reply_text("ℹ️ No positions file found.")
                 return
+            except (OSError, json.JSONDecodeError) as e:
+                logging.error(f"Error reading positions file: {e}")
+                await update.message.reply_text(f"❌ Error reading positions file: {e}")
+                return
             
             pairs_to_show = [pair_filter] if pair_filter else list(PAIRS.keys())
             msg = "📊 Open Positions:\n\n"
@@ -259,14 +253,18 @@ class TelegramInterface:
         """Process messages from queue. Allows main thread to send messages without async/await."""
         while self._running:
             try:
-                if not self._message_queue.empty():
-                    message = self._message_queue.get_nowait()
+                # Use blocking get with timeout for better responsiveness
+                try:
+                    message = await asyncio.get_running_loop().run_in_executor(
+                        None, self._message_queue.get, True, 0.1
+                    )
                     try:
                         await self.app.bot.send_message(chat_id=self.user_id, text=message)
                     except Exception as e:
                         logging.error(f"Failed to send queued message: {e}")
-                else:
-                    await asyncio.sleep(0.1)
+                except:
+                    # Timeout or queue empty, continue loop
+                    pass
             except Exception as e:
                 logging.error(f"Error processing message queue: {e}")
                 await asyncio.sleep(1)
@@ -281,7 +279,7 @@ class TelegramInterface:
     def send_message(self, message):
         """Thread-safe message sending from main thread. Queues message for async processing."""
         try:
-            self._message_queue.put(message)
+            self._message_queue.put_nowait(message)
         except Exception as e:
             logging.error(f"Failed to queue message: {e}")
 
@@ -291,6 +289,9 @@ class TelegramInterface:
         asyncio.set_event_loop(loop)
         self._running = True
         
+        # Initialize executor in the thread where it will be used
+        self._executor = ThreadPoolExecutor(max_workers=3)
+        
         try:
             # Register command handlers
             self.app.add_handler(CommandHandler("help", self.help_command))
@@ -299,15 +300,24 @@ class TelegramInterface:
             self.app.add_handler(CommandHandler("resume", self.resume_command))
             self.app.add_handler(CommandHandler("market", self.market_command))
             self.app.add_handler(CommandHandler("positions", self.positions_command))
-
-            loop.run_until_complete(self.send_startup_message())
             
             async def run_bot():
-                queue_task = asyncio.create_task(self._process_message_queue())
-                
+                # Initialize bot application first
                 await self.app.initialize()
                 await self.app.start()
                 await self.app.updater.start_polling(poll_interval=POLL_INTERVAL_SEC)
+                
+                # Send startup message after bot is initialized
+                try:
+                    await self.app.bot.send_message(
+                        chat_id=self.user_id,
+                        text="🤖 BoTC started and running. Use /help to see available commands."
+                    )
+                except Exception as e:
+                    logging.error(f"Failed to send startup message: {e}")
+                
+                # Start message queue processor after successful initialization
+                queue_task = asyncio.create_task(self._process_message_queue())
                 
                 try:
                     while self._running:
@@ -321,6 +331,7 @@ class TelegramInterface:
                     try:
                         await queue_task
                     except asyncio.CancelledError:
+                        # Expected during shutdown when queue_task is cancelled
                         pass
             
             loop.run_until_complete(run_bot())
@@ -328,28 +339,32 @@ class TelegramInterface:
         except Exception as e:
             logging.error(f"Telegram thread error: {e}")
         finally:
-            self._executor.shutdown(wait=True, cancel_futures=False)
             self._running = False
+            # Cleanup executor before closing loop
+            if self._executor:
+                self._executor.shutdown(wait=True, cancel_futures=True)
             try:
-                # Cancel remaining tasks
-                pending = asyncio.all_tasks(loop)
-                for task in pending:
-                    task.cancel()
-                if pending:
-                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-                loop.close()
+                # Cancel remaining tasks and close loop if it's still open
+                if not loop.is_closed():
+                    pending = asyncio.all_tasks(loop)
+                    for task in pending:
+                        task.cancel()
+                    if pending:
+                        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                    loop.close()
             except Exception as e:
                 logging.warning(f"Error closing event loop: {e}")
             logging.info("Telegram thread has exited.")
 
 tg_interface = None
+tg_thread = None
 
 def initialize_telegram():
     """Initialize and start Telegram bot in a daemon thread."""
-    global tg_interface
+    global tg_interface, tg_thread
     tg_interface = TelegramInterface(TELEGRAM_TOKEN, int(ALLOWED_USER_ID))
-    t = threading.Thread(target=tg_interface.run, daemon=True)
-    t.start()
+    tg_thread = threading.Thread(target=tg_interface.run, daemon=True)
+    tg_thread.start()
     
 def send_notification(msg):
     """Send notification message to Telegram. Called from main trading thread."""
@@ -360,13 +375,20 @@ def send_notification(msg):
 
 def stop_telegram_thread():
     """Stop Telegram bot gracefully by setting running flag to False."""
-    global tg_interface
+    global tg_interface, tg_thread
     try:
         if tg_interface:
             logging.info("Stopping Telegram thread...")
             tg_interface._running = False
-            time.sleep(2)  # Grace period for shutdown
-            logging.info("Telegram thread stop signal sent.")
+            # Wait for thread to actually terminate
+            if tg_thread and tg_thread.is_alive():
+                tg_thread.join(timeout=5)
+                if tg_thread.is_alive():
+                    logging.warning("Telegram thread did not stop within timeout")
+                else:
+                    logging.info("Telegram thread stopped successfully")
+            else:
+                logging.info("Telegram thread already stopped")
         else:
             logging.info("Telegram interface not initialized.")
     except Exception as e:
