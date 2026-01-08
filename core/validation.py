@@ -4,36 +4,49 @@ from core.config import (
     KRAKEN_API_KEY,
     KRAKEN_API_SECRET,
     TELEGRAM_TOKEN,
-    ALLOWED_USER_ID,
-    MODE,
-    PAIRS,
-    TRADING_PARAMS,
-    ASSET_MIN_ALLOCATION,
-    POLL_INTERVAL_SEC,
+    TELEGRAM_USER_ID,
+    TELEGRAM_POLL_INTERVAL,
     SLEEPING_INTERVAL,
-    ATR_DATA_DAYS,
-    ATR_INTERVAL,
-    ATR_PERIOD
+    PARAM_SESSIONS,
+    CANDLE_TIMEFRAME,
+    MARKET_DATA_DAYS,
+    ATR_PERIOD,
+    ATR_DESV_LIMIT,
+    PAIRS
 )
 
 def validate_common_params(errors):
+    # Kraken API credentials
     if not KRAKEN_API_KEY:
         errors.append("KRAKEN_API_KEY is missing")
     if not KRAKEN_API_SECRET:
         errors.append("KRAKEN_API_SECRET is missing")
 
+    # Telegram Bot configuration
     if not TELEGRAM_TOKEN:
         errors.append("TELEGRAM_TOKEN is missing")
-    if not ALLOWED_USER_ID:
-        errors.append("ALLOWED_USER_ID is missing")
-    elif not ALLOWED_USER_ID.isdigit() or int(ALLOWED_USER_ID) <= 0:
-        errors.append("ALLOWED_USER_ID must be a positive integer")
+    if not TELEGRAM_USER_ID:
+        errors.append("TELEGRAM_USER_ID is missing")
+    elif not TELEGRAM_USER_ID.isdigit() or int(TELEGRAM_USER_ID) <= 0:
+        errors.append("TELEGRAM_USER_ID must be a positive integer")
+    if TELEGRAM_POLL_INTERVAL < 0:
+        errors.append("TELEGRAM_POLL_INTERVAL must be a non-negative integer")
 
-    if not MODE:
-        errors.append("MODE is missing")
-    elif MODE not in ["onek", "dualk"]:
-        errors.append(f"Invalid MODE '{MODE}'. Must be 'onek' or 'dualk'")
+    # Bot settings
+    if SLEEPING_INTERVAL <= 0:
+        errors.append("SLEEPING_INTERVAL must be a positive integer")
+    if PARAM_SESSIONS <= 0:
+        errors.append("PARAM_SESSIONS must be a positive integer")
+    if CANDLE_TIMEFRAME <= 0:
+        errors.append("CANDLE_TIMEFRAME must be a positive integer")
+    if MARKET_DATA_DAYS <= 0:
+        errors.append("MARKET_DATA_DAYS must be a positive integer")
+    if ATR_PERIOD <= 0:
+        errors.append("ATR_PERIOD must be a positive integer")
+    if ATR_DESV_LIMIT < 0:
+        errors.append("ATR_DESV_LIMIT must be a non-negative float")
 
+    # Pairs configuration
     if not PAIRS or not any(PAIRS.keys()):
         errors.append("PAIRS is missing or empty")
 
@@ -44,101 +57,19 @@ def build_and_validate_pairs(errors):
             errors.append("No valid pairs found")
     except Exception as e:
         errors.append(f"Failed to fetch pairs: {str(e)}")
-    
-def validate_onek_params(errors):    
-    for pair in PAIRS.keys():
-        params = TRADING_PARAMS.get(pair, {})
-        
-        # Validate SELL side
-        sell_params = params.get("sell", {})
-        sell_k_stop = sell_params.get("K_STOP", -1)
-        sell_min_margin = sell_params.get("MIN_MARGIN", -1)
-        
-        if sell_k_stop < 0:
-            errors.append(f"{pair}_SELL_K_STOP is missing or invalid")
-        if sell_min_margin < 0:
-            errors.append(f"{pair}_SELL_MIN_MARGIN is missing or invalid")
-        
-        # Validate BUY side
-        buy_params = params.get("buy", {})
-        buy_k_stop = buy_params.get("K_STOP", -1)
-        buy_min_margin = buy_params.get("MIN_MARGIN", -1)
-
-        if buy_k_stop < 0:
-            errors.append(f"{pair}_BUY_K_STOP is missing or invalid")
-        if buy_min_margin < 0:
-            errors.append(f"{pair}_BUY_MIN_MARGIN is missing or invalid")
-    
-def validate_dualk_params(errors):
-    for pair in PAIRS.keys():
-        params = TRADING_PARAMS.get(pair, {})
-        
-        # Validate SELL side
-        sell_params = params.get("sell", {})
-        sell_k_act = sell_params.get("K_ACT", -1)
-        sell_k_stop = sell_params.get("K_STOP", -1)
-        sell_min_margin = sell_params.get("MIN_MARGIN", -1)
-        
-        if sell_k_act < 0:
-            errors.append(f"{pair}_SELL_K_ACT is missing or invalid")
-        if sell_k_stop < 0:
-            errors.append(f"{pair}_SELL_K_STOP is missing or invalid")
-        if sell_min_margin < 0:
-            errors.append(f"{pair}_SELL_MIN_MARGIN is missing or invalid")
-
-        if sell_min_margin > 0:
-            # Check K_ACT > K_STOP for valid ATR_MIN calculation
-            if sell_k_act <= sell_k_stop:
-                errors.append(f"{pair}_SELL_K_ACT ({sell_k_act}) must be > {pair}_SELL_K_STOP ({sell_k_stop})")
-            else:
-                sell_params["ATR_MIN"] = sell_min_margin / (sell_k_act - sell_k_stop)
-        
-        # Validate BUY side
-        buy_params = params.get("buy", {})
-        buy_k_act = buy_params.get("K_ACT", -1)
-        buy_k_stop = buy_params.get("K_STOP", -1)
-        buy_min_margin = buy_params.get("MIN_MARGIN", -1)
-        
-        if buy_k_act < 0:
-            errors.append(f"{pair}_BUY_K_ACT is missing or invalid")
-        if buy_k_stop < 0:
-            errors.append(f"{pair}_BUY_K_STOP is missing or invalid")
-        if buy_min_margin < 0:
-            errors.append(f"{pair}_BUY_MIN_MARGIN is missing or invalid")
-        
-        if buy_min_margin > 0:
-            # Check K_ACT > K_STOP for valid ATR_MIN calculation
-            if buy_k_act <= buy_k_stop:
-                errors.append(f"{pair}_BUY_K_ACT ({buy_k_act}) must be > {pair}_BUY_K_STOP ({buy_k_stop})")
-            else:
-                buy_params["ATR_MIN"] = buy_min_margin / (buy_k_act - buy_k_stop)
 
 def log_configuration_summary():
     logging.info("=" * 60)
     logging.info("✅ CONFIGURATION VALIDATED SUCCESSFULLY")
     logging.info("=" * 60)
-    logging.info(f"Mode: {MODE}")
+    logging.info(f"Telegram polling interval: {TELEGRAM_POLL_INTERVAL}s")
     logging.info(f"Session interval: {SLEEPING_INTERVAL}s")
-    logging.info(f"Telegram polling interval: {POLL_INTERVAL_SEC}s")
-    logging.info(f"ATR: {ATR_INTERVAL}min candles | {ATR_PERIOD} period | {ATR_DATA_DAYS} days data")
-    logging.info("-" * 60)
-    
-    # Trading parameters per pair
-    for pair in PAIRS.keys():
-        params = TRADING_PARAMS[pair]
-        logging.info(f"[{pair}] Trading Parameters:")
-        
-        # SELL side - log all available keys for this mode
-        sell = params["sell"]
-        sell_str = ", ".join([f"{k}={v}" for k, v in sell.items()])
-        logging.info(f"  SELL: {sell_str}")
-        
-        # BUY side - log all available keys for this mode
-        buy = params["buy"]
-        buy_str = ", ".join([f"{k}={v}" for k, v in buy.items()])
-        logging.info(f"  BUY:  {buy_str}")
-
-        logging.info(f"  MIN ALLOCATION:  {ASSET_MIN_ALLOCATION[pair]:.0%}")
+    logging.info(f"Parameter calculation sessions: {PARAM_SESSIONS}")
+    logging.info(f"Candle timeframe: {CANDLE_TIMEFRAME}min")
+    logging.info(f"Market data storage: {MARKET_DATA_DAYS} days")
+    logging.info(f"ATR period: {ATR_PERIOD} candles")
+    logging.info(f"Pairs to trade: {', '.join(PAIRS.keys())}")
+    logging.info("-" * 60 + "\n")
 
 def validate_config() -> bool:
     errors = []
@@ -148,13 +79,6 @@ def validate_config() -> bool:
     
     if not errors:
         build_and_validate_pairs(errors)
-    
-    if not errors:
-        # Mode-specific validations
-        if MODE == "onek":
-            validate_onek_params(errors)
-        elif MODE == "dualk":
-            validate_dualk_params(errors)
     
     # Log all errors at the end
     if errors:

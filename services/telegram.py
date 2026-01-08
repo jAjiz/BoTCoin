@@ -1,9 +1,7 @@
-import threading, time, logging, asyncio, json, requests
-
+import threading, time, logging, asyncio, requests
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
-
-from core.config import TELEGRAM_TOKEN, ALLOWED_USER_ID, POLL_INTERVAL_SEC, MODE, PAIRS
+from core.config import TELEGRAM_TOKEN, TELEGRAM_USER_ID, TELEGRAM_POLL_INTERVAL, PAIRS
 from core.runtime import get_last_balance, get_pair_data, get_trailing_state
 
 BOT_PAUSED = False
@@ -56,7 +54,6 @@ class TelegramInterface:
         await update.message.reply_text(
             f"Status: {status}\n"
             f"Last activity: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-            f"Mode: {MODE.upper()}\n"
             f"Pairs: {pairs_list}\n"
         )
 
@@ -147,9 +144,9 @@ class TelegramInterface:
                 for pos_id, pos in pair_positions.items():
                     trailing_active = pos.get('trailing_price') is not None
 
-                    side = pos.get('side', '').lower()
-                    entry_price = pos.get('entry_price')
-                    activation_price = pos.get('activation_price')
+                    side = pos['side'].lower()
+                    entry_price = pos['entry_price']
+                    activation_price = pos['activation_price']
 
                     # Base lines
                     base_lines = [
@@ -171,16 +168,21 @@ class TelegramInterface:
                         msg += "\n".join(base_lines) + "\n\n"
                     else:
                         # Active: show full trailing info and P&L
-                        trailing_price = pos.get('trailing_price')
-                        stop_price = pos.get('stop_price')
-                        pnl_pct = pos.get('pnl', 0.0)
-                        pnl_symbol = "🟢" if pnl_pct > 0 else "🔴"
+                        trailing_price = pos['trailing_price']
+                        stop_price = pos['stop_price']
+
+                        if side == 'sell':
+                            estimated_pnl = (stop_price - entry_price) / entry_price * 100
+                        else:
+                            estimated_pnl = (entry_price - stop_price) / entry_price * 100
+
+                        pnl_symbol = "🟢" if estimated_pnl > 0 else "🔴"
 
                         base_lines.extend([
                             f"Activation: {activation_price:,.2f}€",
                             f"Trailing: {trailing_price:,.2f}€",
                             f"Stop: {stop_price:,.2f}€",
-                            f"PnL: {pnl_symbol} {pnl_pct:+.2f}%",
+                            f"PnL: {pnl_symbol} {estimated_pnl:+.2f}%",
                         ])
                         msg += "\n".join(base_lines) + "\n\n"
 
@@ -224,7 +226,7 @@ class TelegramInterface:
             loop.run_until_complete(self.send_startup_message())
 
             self.app.run_polling(
-                poll_interval=POLL_INTERVAL_SEC, 
+                poll_interval=TELEGRAM_POLL_INTERVAL, 
                 stop_signals=None, 
                 close_loop=False
             )
@@ -243,7 +245,7 @@ tg_interface = None
 
 def initialize_telegram():
     global tg_interface
-    tg_interface = TelegramInterface(TELEGRAM_TOKEN, int(ALLOWED_USER_ID))
+    tg_interface = TelegramInterface(TELEGRAM_TOKEN, int(TELEGRAM_USER_ID))
     t = threading.Thread(target=tg_interface.run, daemon=True)
     t.start()
     

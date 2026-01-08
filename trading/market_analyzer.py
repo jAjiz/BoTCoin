@@ -10,9 +10,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from core.config import MARKET_ANALYZER, ATR_INTERVAL
+from core.config import MARKET_ANALYZER, CANDLE_TIMEFRAME
 
 DEFAULT_ORDER = MARKET_ANALYZER["DEFAULT_ORDER"]
+MINIMUN_CHANGE_PCT = MARKET_ANALYZER["MINIMUN_CHANGE_PCT"]
 
 def get_args():
     args = {'pair': None, 'show_events': False, 'order': DEFAULT_ORDER}
@@ -33,7 +34,7 @@ def get_args():
     return args
 
 def load_data(pair):
-    atr_file = f"data/{pair}_atr_data_{ATR_INTERVAL}min.csv"
+    atr_file = f"data/{pair}_ohlc_data_{CANDLE_TIMEFRAME}min.csv"
     if not os.path.exists(atr_file):
         raise FileNotFoundError(f"File not found: {atr_file}")
     
@@ -76,17 +77,18 @@ def detect_pivots(df, order=DEFAULT_ORDER):
             else:
                 del pivots[i]
         elif curr_price != next_price:
-            if abs(curr_price - next_price) / curr_price < 0.015:  # 1.5% threshold
+            if abs(curr_price - next_price) / curr_price < MINIMUN_CHANGE_PCT:
                 del pivots[i + 1]
             else:
                 i += 1
+
     return pivots
     
 def calculate_noise_between_pivots(df, pivot_pair):
     start_idx, start_type, start_price, start_dtime = pivot_pair[0]
     end_idx, end_type, end_price, end_dtime = pivot_pair[1]
     
-    price_change = abs((end_price - start_price) / start_price)
+    price_change_pct = abs((end_price - start_price) / start_price)
     segment = df.iloc[start_idx+1:end_idx]
     
     if len(segment) == 0:
@@ -108,24 +110,20 @@ def calculate_noise_between_pivots(df, pivot_pair):
         return None
     
     atr_at_max = segment.loc[idx_max, 'atr']
-    atr_min = df['atr'].median()
-    atr_at_max = max(atr_at_max, atr_min)
     k_value = max_value / atr_at_max if atr_at_max > 0 else 0
-    
+
     return {
         'type': 'uptrend' if start_type == 'min' else 'downtrend',
         'start_dtime': start_dtime,
         'end_dtime': end_dtime,
-        'price_change': price_change,
+        'price_change_pct': price_change_pct,
+        'price_change_k': (end_price - start_price) / atr_at_max,
         'max_value': max_value,
         'atr_at_max': atr_at_max,
         'k_value': k_value
     }
 
-def analyze_structural_noise(pair, order=DEFAULT_ORDER, show_events=False):
-    df = load_data(pair)
-    print(f"--- Analyzing {pair} Market Structure ({len(df)} candles) ---")
-    
+def analyze_structural_noise(df, order=DEFAULT_ORDER, print_results=False, show_events=False):
     # Detect and filter pivots
     pivots = detect_pivots(df, order)
     
@@ -141,13 +139,16 @@ def analyze_structural_noise(pair, order=DEFAULT_ORDER, show_events=False):
             else:
                 downtrend_data.append(event)
     
-    # Print results
-    print_statistics(uptrend_data, "UPTREND NOISE (Stop Loss configuration)")
-    print_statistics(downtrend_data, "DOWNTREND NOISE (Reentry Stop configuration)")
-    
-    if show_events:
-        print_events_detail(uptrend_data, "UPTREND EVENTS")
-        print_events_detail(downtrend_data, "DOWNTREND EVENTS")
+    if print_results:
+        print(f"--- Analyzing Market Structure ({len(df)} candles) ---")
+        print_statistics(uptrend_data, "UPTREND NOISE (Stop Loss configuration)")
+        print_statistics(downtrend_data, "DOWNTREND NOISE (Reentry Stop configuration)")
+        
+        if show_events:
+            print_events_detail(uptrend_data, "UPTREND EVENTS")
+            print_events_detail(downtrend_data, "DOWNTREND EVENTS")
+
+    return uptrend_data, downtrend_data
 
 def print_statistics(events, title):
     if not events:
@@ -170,14 +171,15 @@ def print_events_detail(events, title):
         return
     
     print(f"\n=== {title} ===")
-    print(f"{'From':<20} | {'To':<20} | {'Change %':>10} | {'Max Value':>11} | {'ATR':>9} | {'K Value':>10}")
-    print("-" * 105)
+    print(f"{'From':<20} | {'To':<20} | {'Change %':>10} | {'Change K':>10} | {'Max Value':>11} | {'ATR':>9} | {'K Value':>10}")
+    print("-" * 135)
     
     for event in events:
-        change_pct = event['price_change'] * 100
+        change_pct = event['price_change_pct'] * 100
         print(f"{str(event['start_dtime']):<20} | {str(event['end_dtime']):<20} "
-              f"| {change_pct:>9.2f}% | {event['max_value']:>11.4f} | {event['atr_at_max']:>9.4f} | {event['k_value']:>9.2f}")
+              f"| {change_pct:>9.2f}% | {event['price_change_k']:>9.2f} "
+              f"| {event['max_value']:>11.4f} | {event['atr_at_max']:>9.4f} | {event['k_value']:>9.2f}")
 
 if __name__ == "__main__":
     args = get_args()
-    analyze_structural_noise(args['pair'], args['order'], args['show_events'])
+    analyze_structural_noise(load_data(args['pair']), args['order'], True, args['show_events'])
