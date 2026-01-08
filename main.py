@@ -3,12 +3,11 @@ import sys
 import core.logging as logging
 import core.runtime as runtime
 import services.telegram as telegram
-import strategies.dualk as dualk_mode
-import strategies.onek as onek_mode
-import utils.atr_manager as atr_manager
+from trading.parameters_manager import calculate_trading_parameters
+from trading.positions_manager import calculate_activation_price, calculate_stop_price
 from exchange.kraken import get_balance, get_last_price, get_current_atr, get_closed_orders, place_limit_order
 from core.state import load_trailing_state, save_trailing_state, is_processed, save_closed_position
-from core.config import PAIRS, SLEEPING_INTERVAL, MODE, ASSET_MIN_ALLOCATION, RECENTER_PARAMS, ATR_MIN_SESSIONS
+from core.config import SLEEPING_INTERVAL, PAIRS, PARAM_SESSIONS, ATR_DESV_LIMIT
 from core.validation import validate_config
 
 def main():
@@ -27,13 +26,6 @@ def main():
                 continue
 
             logging.info("======== STARTING SESSION ========")
-
-            # Calculate ATR minimums every ATR_MIN_SESSIONS
-            if session_count % ATR_MIN_SESSIONS == 0:
-                logging.info("Calculating ATR minimums...")
-                for pair in PAIRS.keys():
-                    PAIRS[pair]["atr_min"] = atr_manager.calculate_atr_min(pair)
-            
             trailing_state = load_trailing_state()
             current_balance = get_balance()
             
@@ -46,37 +38,37 @@ def main():
             
             two_session_ago = int(time.time()) - SLEEPING_INTERVAL * 2
             one_week_ago = int(time.time()) - (60 * 60 * 24 * 7)
+            closed_orders = get_closed_orders(one_week_ago, two_session_ago)
             
             for pair in PAIRS.keys():
                 current_price = get_last_price(PAIRS[pair]["primary"])
                 current_atr = get_current_atr(pair)
 
                 if current_price is None or current_atr is None:
-                    logging.error(f"Could not fetch price or ATR for {pair}. Skipping this pair.\n")
+                    logging.error(f"Could not fetch price or ATR for {pair}. Skipping this pair.")
                     continue
                 else:
                     logging.info(f"[{pair}] Market: {current_price:,.1f}€ | ATR: {current_atr:,.1f}€")
                     runtime.update_pair_data(pair, price=current_price, atr=current_atr)
 
-                    effective_atr = max(current_atr, PAIRS[pair]["atr_min"])
-                    if current_atr < PAIRS[pair]["atr_min"]:
-                        logging.info(f"[{pair}] ATR ({current_atr:.4f}) < Min ({PAIRS[pair]['atr_min']:.4f}). Using min.")
+                    # Calculate trading parameters every PARAM_SESSIONS
+                    if session_count % PARAM_SESSIONS == 0:
+                        logging.info(f"Calculating trading parameters...")
+                        calculate_trading_parameters(pair)
                 
                 if pair not in trailing_state:
                     trailing_state[pair] = {}
                 pair_state = trailing_state[pair]
                 
-                closed_orders = get_closed_orders(one_week_ago, two_session_ago)
                 if closed_orders:
                     for order_id, order in closed_orders.items():
-                        order_pair = order.get("descr", {}).get("pair", "")
-                        if order_pair != pair:
+                        if order["descr"]["pair"] != pair:
                             continue
                         if is_processed(order_id, pair_state):
                             continue
-                        process_closed_order(order_id, order, pair_state, effective_atr, pair)
+                        process_closed_order(pair, pair_state, order_id, order, current_atr)
                 
-                update_trailing_state(pair_state, pair, current_price, effective_atr, current_balance)
+                update_trailing_state(pair, pair_state, current_price, current_atr)
                 time.sleep(1)  # To avoid hitting rate limits
             
             save_trailing_state(trailing_state)
@@ -86,6 +78,8 @@ def main():
             logging.info(f"Session complete. Sleeping for {SLEEPING_INTERVAL}s.\n")
             time.sleep(SLEEPING_INTERVAL)
 
+    except Exception as e:
+        logging.error(f"BoTC encountered an error: {e}\n", to_telegram=True)
     except KeyboardInterrupt:
         logging.info("BoTC stopped manually by user.\n", to_telegram=True)
     finally:
@@ -94,10 +88,7 @@ def main():
 def now_str():
     return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
 
-def get_reference_price(pos):
-    return pos.get("reference_price", pos["entry_price"])
-
-def process_closed_order(order_id, order, pair_state, atr_val, pair):
+def process_closed_order(pair, pair_state, order_id, order, atr_val):
     logging.info(f"Processing order {order_id}...")
     entry_price = float(order["price"])
     volume = float(order["vol_exec"])
@@ -106,123 +97,50 @@ def process_closed_order(order_id, order, pair_state, atr_val, pair):
 
     if side not in ["buy", "sell"]:
         return
-
-    if MODE == "onek":
-        new_side, activation_price = onek_mode.process_order(side, entry_price, atr_val, pair)
-    elif MODE == "dualk":
-        new_side, activation_price = dualk_mode.process_order(side, entry_price, atr_val, pair)
-
-    existing_position = None
-    for existing_id, pos in list(pair_state.items()):
-        if pos["side"] != new_side or pos.get("trailing_price") is not None:
-            continue
-        
-        reference_price = pos.get("reference_price", pos["entry_price"])
-        price_diff_pct = abs(reference_price - entry_price) / reference_price * 100        
-        if price_diff_pct < 0.5:  # 0.5% threshold to consider merging
-            existing_position = (existing_id, pos)
-            break
     
-    if existing_position:
-        existing_id, existing_pos = existing_position
-
-        if new_side == "sell":
-            new_volume = existing_pos["volume"] + volume
-            new_cost = new_volume * existing_pos["entry_price"]
-        else:
-            new_cost = existing_pos["cost"] + cost
-            new_volume = new_cost / existing_pos["entry_price"]
-        
-        existing_pos["volume"] = round(new_volume, 8)
-        existing_pos["cost"] = round(new_cost, 2)
-        existing_pos["opening_order"].append(order_id)
-        
-        logging.info(
-            f"🔀[MERGE] Unified order {order_id} into existing position {existing_id}: "
-            f"activation at {pair_state[existing_id]['activation_price']:,}€",
-            to_telegram=True
-        )
+    if side == "buy":
+        new_side = "sell"
     else:
-        pair_state[order_id] = {
-            "side": new_side,
-            "created_time": now_str(),
-            "opening_order": [order_id],
-            "entry_price": entry_price,
-            "volume": volume,
-            "cost": round(cost, 2),
-            "activation_atr": round(atr_val, 1),
-            "activation_price": round(activation_price, 1)
-        }
-        
-        logging.info(
-            f"🆕[CREATE] New trailing position {order_id} for {new_side.upper()} order: "
-            f"activation at {pair_state[order_id]['activation_price']:,}€",
-            to_telegram=True
-        )    
+        new_side = "buy"
 
-def update_trailing_state(pair_state, pair, current_price, atr_val, current_balance):
+    activation_price = calculate_activation_price(pair, new_side, entry_price, atr_val)
+
+    pair_state[order_id] = {
+        "side": new_side,
+        "created_time": now_str(),
+        "opening_order": [order_id],
+        "entry_price": entry_price,
+        "volume": volume,
+        "cost": round(cost, 2),
+        "activation_atr": round(atr_val, 1),
+        "activation_price": round(activation_price, 1)
+    }
+    
+    logging.info(
+        f"🆕[CREATE] New trailing position {order_id} for {new_side.upper()} order: "
+        f"activation at {pair_state[order_id]['activation_price']:,}€",
+        to_telegram=True
+    )    
+
+def update_trailing_state(pair, pair_state, current_price, current_atr):
     logging.info(f"Checking trailing positions...")
 
-    def calculate_activation_price(pos, atr_val):
-        side = pos["side"]
-        reference_price = get_reference_price(pos)
-
-        if MODE == "onek":
-            activation_distance = onek_mode.calculate_activation_dist(side, atr_val, reference_price, pair)
-        elif MODE == "dualk":
-            activation_distance = dualk_mode.calculate_activation_dist(side, atr_val, pair)
-
-        activation_price = reference_price + activation_distance if side == "sell" else reference_price - activation_distance
+    def update_activation_price(pos, atr_val):
+        activation_price = calculate_activation_price(pair, pos["side"], pos["entry_price"], atr_val)
 
         pos.update({
             "activation_price": round(activation_price, 1),
             "activation_atr": round(atr_val, 1)
         })
 
-    def calculate_stop_price(pos, atr_val, trailing_price):
-        side = pos["side"]
-        reference_price = get_reference_price(pos)
-
-        if MODE == "onek":
-            stop_price = onek_mode.calculate_stop_price(side, trailing_price, atr_val, pair)
-        elif MODE == "dualk":
-            stop_price = dualk_mode.calculate_stop_price(side, reference_price, trailing_price, atr_val, pair)
+    def update_stop_price(pos, trailing_price, atr_val):
+        stop_price = calculate_stop_price(pair, pos["side"], trailing_price, atr_val)
     
         pos.update({
             "trailing_price": trailing_price,
             "stop_price": round(stop_price, 1),
             "stop_atr": round(atr_val, 1)
         })
-        
-    def check_recenter_activation(pos, atr_val, current_price):
-        atr_threshold = float(RECENTER_PARAMS[pair]["ATR_MULT"]) * atr_val
-        price_threshold = float(RECENTER_PARAMS[pair]["PRICE_PCT"]) * current_price
-        max_threshold = max(atr_threshold, price_threshold)
-
-        # If both RECENTER_PARAMS are set to 0, skip recentering
-        if max_threshold > 0 and abs(pos["activation_price"] - current_price) > max_threshold:
-            return True
-        return False
-
-    def can_execute_sell(order_id, vol_to_sell, current_balance, current_price):
-        asset = PAIRS[pair]["base"]
-        fiat = PAIRS[pair]["quote"]
-        
-        asset_after_sell = float(current_balance.get(asset, 0)) - vol_to_sell
-        fiat_after_sell = float(current_balance.get(fiat, 0)) + (vol_to_sell * current_price)
-
-        total_value_after = (asset_after_sell * current_price) + fiat_after_sell
-        if total_value_after == 0: return True
-
-        asset_allocation_after = (asset_after_sell * current_price) / total_value_after
-        min_allocation = ASSET_MIN_ALLOCATION[pair]
-        
-        if asset_allocation_after < min_allocation:
-            logging.warning(f"🛡️[BLOCKED] Sell {order_id} by inventory ratio: {asset_allocation_after:.2%} < min: {min_allocation:.0%}.",
-                            to_telegram=True)
-            return False
-        
-        return True
     
     def close_position(order_id, pos):
         try:
@@ -263,20 +181,13 @@ def update_trailing_state(pair_state, pair, current_price, atr_val, current_bala
     for order_id, pos in list(pair_state.items()):
         side = pos["side"]
         trailing_active = pos.get("trailing_price") is not None
-        # atr_val = current_atr 
-        # if MODE == "dualk":
-        #     atr_val = dualk_mode.calculate_atr_value(side, current_price, current_atr, pair)
+        atr_limit_max = current_atr * (1 + ATR_DESV_LIMIT)
+        atr_limit_min = current_atr * (1 - ATR_DESV_LIMIT)
 
         if not trailing_active:
-            # Recenter activation
-            if check_recenter_activation(pos, atr_val, current_price):
-                pos["reference_price"] = current_price
-                calculate_activation_price(pos, atr_val)
-                logging.info(f"🔄[RECENTER] Position {order_id}: recentered activation price to {pos['activation_price']:,}€.")
-
             # Recalibrate activation
-            if pos["activation_atr"] * 0.8 > atr_val or atr_val > pos["activation_atr"] * 1.2:
-                calculate_activation_price(pos, atr_val)
+            if pos["activation_atr"] < atr_limit_min or pos["activation_atr"] > atr_limit_max:
+                update_activation_price(pos, current_atr)
                 logging.info(f"♻️[ATR] Position {order_id}: recalibrate activation price to {pos['activation_price']:,}€.")
 
             # Activation check
@@ -285,17 +196,17 @@ def update_trailing_state(pair_state, pair, current_price, atr_val, current_bala
                 pos["activation_time"] = now_str()
                 logging.info(f"⚡[ACTIVE] Activation price {pos['activation_price']:,}€ reached for position {order_id}",
                               to_telegram=True)
-                calculate_stop_price(pos, atr_val, current_price)
+                update_stop_price(pos, current_price, current_atr)
                 logging.info(f"📈[TRAIL] Position {order_id}: New price {pos['trailing_price']:,}€ | Stop {pos['stop_price']:,}€")
 
         else:
             # Recalibrate stop
-            if (pos["stop_atr"] * 0.8 > atr_val or atr_val > pos["stop_atr"] * 1.2):
-                calculate_stop_price(pos, atr_val, pos["trailing_price"])
+            if pos["stop_atr"] < atr_limit_min or pos["stop_atr"] > atr_limit_max:
+                update_stop_price(pos, pos["trailing_price"], current_atr)
                 logging.info(f"♻️[ATR] Position {order_id}: recalibrate stop price to {pos['stop_price']:,}€.")
 
             # Stop hit check
-            if (side == "sell" and current_price <= pos["stop_price"] and can_execute_sell(order_id, pos["volume"], current_balance, current_price)) or \
+            if (side == "sell" and current_price <= pos["stop_price"]) or \
                (side == "buy" and current_price >= pos["stop_price"]):
                 close_position(order_id, pos)
                 continue 
@@ -303,7 +214,7 @@ def update_trailing_state(pair_state, pair, current_price, atr_val, current_bala
             # Update trailing
             if (side == "sell" and current_price > pos["trailing_price"]) or \
                (side == "buy" and current_price < pos["trailing_price"]):
-                calculate_stop_price(pos, atr_val, current_price)
+                update_stop_price(pos, current_price, current_atr)
                 logging.info(f"📈[TRAIL] Position {order_id}: New price {pos['trailing_price']:,}€ | Stop {pos['stop_price']:,}€")
                 
     

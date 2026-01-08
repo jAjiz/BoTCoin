@@ -4,7 +4,7 @@ import logging
 import pandas as pd
 from datetime import datetime, timedelta
 from pykrakenapi import KrakenAPI
-from core.config import KRAKEN_API_KEY, KRAKEN_API_SECRET, ATR_DATA_DAYS, ATR_INTERVAL, ATR_PERIOD
+from core.config import KRAKEN_API_KEY, KRAKEN_API_SECRET, CANDLE_TIMEFRAME, MARKET_DATA_DAYS, ATR_PERIOD
 
 ## Ignore future warnings
 import warnings
@@ -94,7 +94,7 @@ def place_limit_order(pair, side, price, volume):
     
 def get_current_atr(pair):
     try:
-        atr_file = f"data/{pair}_atr_data_{ATR_INTERVAL}min.csv"
+        atr_file = f"data/{pair}_ohlc_data_{CANDLE_TIMEFRAME}min.csv"
         since_param = None
         existing_df = None
         
@@ -107,7 +107,7 @@ def get_current_atr(pair):
             except Exception as e:
                 existing_df = None
         
-        df, _ = krakenapi.get_ohlc_data(pair, interval=ATR_INTERVAL, since=since_param)
+        df, _ = krakenapi.get_ohlc_data(pair, interval=CANDLE_TIMEFRAME, since=since_param)
         df = df.sort_index()
         
         if existing_df is not None and not existing_df.empty:
@@ -115,7 +115,7 @@ def get_current_atr(pair):
             df = df[~df.index.duplicated(keep='last')]
             df = df.sort_index()
         
-        cutoff_date = datetime.now() - timedelta(days=ATR_DATA_DAYS)
+        cutoff_date = datetime.now() - timedelta(days=MARKET_DATA_DAYS)
         df = df[df.index >= cutoff_date]
         
         df["H-L"] = df["high"] - df["low"]
