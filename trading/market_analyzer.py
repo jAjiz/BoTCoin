@@ -140,7 +140,7 @@ def analyze_structural_noise(df, order=DEFAULT_ORDER, print_results=False, show_
                 downtrend_data.append(event)
     
     if print_results:
-        print(f"--- Analyzing Market Structure ({len(df)} candles) ---")
+        print(f"--- Analyzing Market Structure (minimum change {MINIMUN_CHANGE_PCT*100:.2f}%) ---")
         print_statistics(uptrend_data, "UPTREND NOISE (Stop Loss configuration)")
         print_statistics(downtrend_data, "DOWNTREND NOISE (Reentry Stop configuration)")
         
@@ -171,14 +171,14 @@ def print_events_detail(events, title):
         return
     
     print(f"\n=== {title} ===")
-    print(f"{'From':<20} | {'To':<20} | {'Change %':>10} | {'Change K':>10} | {'Max Value':>11} | {'ATR':>9} | {'K Value':>10}")
+    print(f"{'From':<20} | {'To':<20} | {'Change %':>10} | {'Change K':>9} | {'Max Value':>10} | {'ATR at max':>10} | {'K Value':>8}")
     print("-" * 135)
     
     for event in events:
         change_pct = event['price_change_pct'] * 100
         print(f"{str(event['start_dtime']):<20} | {str(event['end_dtime']):<20} "
               f"| {change_pct:>9.2f}% | {event['price_change_k']:>9.2f} "
-              f"| {event['max_value']:>11.4f} | {event['atr_at_max']:>9.4f} | {event['k_value']:>9.2f}")
+              f"| {event['max_value']:>10.1f} | {event['atr_at_max']:>10.1f} | {event['k_value']:>8.2f}")
 
 if __name__ == "__main__":
     args = get_args()
