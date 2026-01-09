@@ -1,31 +1,36 @@
 import math
 import pandas as pd
+import numpy as np
 import logging
 from core.config import PAIRS, TRADING_PARAMS
 from trading.market_analyzer import load_data, analyze_structural_noise
 
-def calculate_k_stops(events_data, atr_median):
+def calculate_k_stops(pair, events_data):
     if not events_data:
         return {"LV": None, "MV": None, "HV": None, "EV": None}
     
-    lv = [e for e in events_data if e['atr_at_max'] < atr_median]
-    mv = [e for e in events_data if atr_median <= e['atr_at_max'] < atr_median * 1.5]
-    hv = [e for e in events_data if atr_median * 1.5 <= e['atr_at_max'] < atr_median * 3]
-    ev = [e for e in events_data if e['atr_at_max'] >= atr_median * 3]
+    atr_50pct = PAIRS[pair]['atr_50pct']
+    atr_80pct = PAIRS[pair]['atr_80pct']
+    atr_95pct = PAIRS[pair]['atr_95pct']
+
+    lv = [e for e in events_data if e['atr_at_max'] <= atr_50pct]
+    mv = [e for e in events_data if atr_50pct < e['atr_at_max'] <= atr_80pct]
+    hv = [e for e in events_data if atr_80pct < e['atr_at_max'] <= atr_95pct]
+    ev = [e for e in events_data if e['atr_at_max'] > atr_95pct]
     
-    def get_p75_k_value(events):
+    def get_pct_k_value(events, pct):
         if not events:
             return None
-        value = pd.Series([e['k_value'] for e in events]).quantile(0.75)
+        value = pd.Series([e['k_value'] for e in events]).quantile(pct)
         precision = 1  # One decimal place
         factor = 10 ** precision
         return math.ceil(value * factor) / factor
     
     return {
-        "LV": get_p75_k_value(lv),
-        "MV": get_p75_k_value(mv),
-        "HV": get_p75_k_value(hv),
-        "EV": get_p75_k_value(ev)
+        "LV": get_pct_k_value(lv, 1.00), # Percentile 100 for LV
+        "MV": get_pct_k_value(mv, 0.90), # Percentile 90 for MV
+        "HV": get_pct_k_value(hv, 0.75), # Percentile 75 for HV
+        "EV": get_pct_k_value(ev, 0.50) # Percentile 50 for EV
     }
 
 def calculate_trading_parameters(pair):
@@ -35,12 +40,14 @@ def calculate_trading_parameters(pair):
         logging.error(f"Error loading data for {pair}: {e}")
         raise e
     
-    PAIRS[pair]['atr_median'] = df['atr'].median()
-    logging.info(f"ATR_MEDIAN → {PAIRS[pair]['atr_median']:,.1f}€")
+    PAIRS[pair]['atr_50pct'] = np.percentile(df['atr'], 50)
+    PAIRS[pair]['atr_80pct'] = np.percentile(df['atr'], 80)
+    PAIRS[pair]['atr_95pct'] = np.percentile(df['atr'], 95)
+    logging.info(f"ATR percentiles → 50:{PAIRS[pair]['atr_50pct']:,.1f}€ | 80:{PAIRS[pair]['atr_80pct']:,.1f}€ | 95:{PAIRS[pair]['atr_95pct']:,.1f}€")
     
     uptrend_data, downtrend_data = analyze_structural_noise(df)
-    sell_k_stops = calculate_k_stops(uptrend_data, PAIRS[pair]['atr_median'])
-    buy_k_stops = calculate_k_stops(downtrend_data, PAIRS[pair]['atr_median'])
+    sell_k_stops = calculate_k_stops(pair, uptrend_data)
+    buy_k_stops = calculate_k_stops(pair, downtrend_data)
     
     TRADING_PARAMS[pair]["sell"]["K_STOP"] = sell_k_stops
     TRADING_PARAMS[pair]["buy"]["K_STOP"] = buy_k_stops
@@ -50,15 +57,15 @@ def calculate_trading_parameters(pair):
     logging.info(f"K_STOP_BUY  → LV:{fmt(buy_k_stops['LV'])} | MV:{fmt(buy_k_stops['MV'])} | HV:{fmt(buy_k_stops['HV'])} | EV:{fmt(buy_k_stops['EV'])}")
 
 def get_volatility_level(pair, atr_val):
-    atr_median = PAIRS[pair].get('atr_median')
-    if atr_median is None:
-        raise ValueError(f"ATR_MEDIAN not calculated for {pair}")
+    atr_50pct = PAIRS[pair]['atr_50pct']
+    atr_80pct = PAIRS[pair]['atr_80pct']
+    atr_95pct = PAIRS[pair]['atr_95pct']
     
-    if atr_val < atr_median:
+    if atr_val <= atr_50pct:
         return "LV"
-    elif atr_val < atr_median * 1.5:
+    elif atr_val <= atr_80pct:
         return "MV"
-    elif atr_val < atr_median * 3:
+    elif atr_val <= atr_95pct:
         return "HV"
     else:
         return "EV"
