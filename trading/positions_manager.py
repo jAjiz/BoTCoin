@@ -1,9 +1,70 @@
 import core.logging as logging
+from trading.inventory_manager import calculate_pair_values, get_available_fiat
 from trading.parameters_manager import get_k_stop
-from core.config import ASSET_MIN_ALLOCATION, PAIRS, RECENTER_PARAMS, TRADING_PARAMS
+from core.utils import now_str
+from core.config import TRADING_PARAMS, MIN_COST
+from core.state import load_closed_positions
+from exchange.kraken import place_limit_order
+
+def create_position(pair, balance, last_prices, atr_val, trailing_state):
+    current_price = last_prices[pair]
+    target_value, current_value, hodl_value = calculate_pair_values(pair, balance, last_prices)
+    
+    # if current value is greater than value needed to reach target, we sell
+    if current_value > (target_value - current_value):
+        side = "sell"
+        # Sell volume is the excess over hodl value
+        volume = (current_value - hodl_value) / current_price
+    else:
+        side = "buy"
+        # Buy volume is the deficit to reach target value
+        value_needed = target_value - current_value
+        value_available = get_available_fiat(balance, last_prices, trailing_state)
+        volume = min(value_needed, value_available) / current_price
+
+    # Validate minimum position cost
+    position_cost = volume * current_price
+    if position_cost < MIN_COST:
+        logging.info(f"[{pair}] Cannot create {side.upper()} position: "
+                     f"cost {position_cost:.1f}€ < minimum {MIN_COST:.1f}€")
+        return
+
+    # Get entry_price from last closed position with opposite side
+    entry_price = current_price
+    closed_positions = load_closed_positions()
+    if pair in closed_positions and closed_positions[pair]:
+        for pos in reversed(closed_positions[pair]):
+            if pos.get("side") != side:
+                entry_price = pos.get("closing_price", current_price)
+                break
+
+    activation_price = calculate_activation_price(pair, side, entry_price, atr_val)
+
+    trailing_state[pair] = {
+        "side": side,
+        "volume": round(volume, 8),
+        "entry_price": entry_price,
+        "activation_atr": round(atr_val, 1),
+        "activation_price": round(activation_price, 1),
+        "creation_time": now_str()
+    }
+    
+    logging.info(
+        f"[{pair}] 🆕 New {side.upper()} position: activation at {activation_price:,.1f}€",
+        to_telegram=True
+    )  
 
 def calculate_activation_price(pair, side, entry_price, atr_val):
-    activation_distance = calculate_activation_dist(pair, side, entry_price, atr_val)
+    k_act = TRADING_PARAMS[pair][side]["K_ACT"]
+
+    if k_act is not None:
+        # Use K_ACT if defined, K_ACT = 0 means immediate activation
+        activation_distance = float(k_act) * atr_val
+    else:
+        # Use K_STOP and MIN_MARGIN if K_ACT is not defined
+        k_stop = get_k_stop(pair, side, atr_val)
+        min_margin = float(TRADING_PARAMS[pair][side]["MIN_MARGIN"])
+        activation_distance = k_stop * atr_val + min_margin * entry_price
 
     if side == "sell":
         activation_price = entry_price - activation_distance
@@ -12,17 +73,15 @@ def calculate_activation_price(pair, side, entry_price, atr_val):
 
     return activation_price
 
-def calculate_activation_dist(pair, side, entry_price, atr_val):
-    k_act = TRADING_PARAMS[pair][side]["K_ACT"]
+def update_activation_price(pair, pos, atr_val):
+    side = pos["side"]
+    entry_price = pos["entry_price"]
+    activation_price = calculate_activation_price(pair, side, entry_price, atr_val)
 
-    if k_act is not None:
-        activation_distance = float(k_act) * atr_val
-    else:
-        k_stop = get_k_stop(pair, side, atr_val)
-        min_margin = float(TRADING_PARAMS[pair][side]["MIN_MARGIN"])
-        activation_distance = k_stop * atr_val + min_margin * entry_price
-
-    return activation_distance
+    pos.update({
+        "activation_price": round(activation_price, 1),
+        "activation_atr": round(atr_val, 1)
+    })
 
 def calculate_stop_price(pair, side, trailing_price, atr_val):
     k_stop = get_k_stop(pair, side, atr_val)
@@ -35,32 +94,51 @@ def calculate_stop_price(pair, side, trailing_price, atr_val):
 
     return stop_price
 
-def check_recenter_activation(pair, pos, atr_val, price):
-        atr_threshold = float(RECENTER_PARAMS[pair]["ATR_MULT"]) * atr_val
-        price_threshold = float(RECENTER_PARAMS[pair]["PRICE_PCT"]) * price
-        max_threshold = max(atr_threshold, price_threshold)
+def update_stop_price(pair, pos, trailing_price, atr_val):
+    side = pos["side"]
+    stop_price = calculate_stop_price(pair, side, trailing_price, atr_val)
 
-        # If both RECENTER_PARAMS are set to 0, skip recentering
-        if max_threshold > 0 and abs(pos["activation_price"] - price) > max_threshold:
-            return True
-        return False
+    pos.update({
+        "trailing_price": trailing_price,
+        "stop_price": round(stop_price, 1),
+        "stop_atr": round(atr_val, 1)
+    })
 
-def can_execute_sell(pair, order_id, vol_to_sell, balance, price):
-    asset = PAIRS[pair]["base"]
-    fiat = PAIRS[pair]["quote"]
-    
-    asset_after_sell = float(balance.get(asset, 0)) - vol_to_sell
-    fiat_after_sell = float(balance.get(fiat, 0)) + (vol_to_sell * price)
-
-    total_value_after = (asset_after_sell * price) + fiat_after_sell
-    if total_value_after == 0: return True
-
-    asset_allocation_after = (asset_after_sell * price) / total_value_after
-    min_allocation = float(ASSET_MIN_ALLOCATION[pair])
-    
-    if asset_allocation_after < min_allocation:
-        logging.warning(f"🛡️[BLOCKED] Sell {order_id} by inventory ratio: {asset_allocation_after:.2%} < min: {min_allocation:.0%}.",
+def close_position(pair, pos, balance, last_prices, trailing_state):
+    try:
+        side = pos["side"]
+        entry_price = pos["entry_price"]
+        stop_price = pos["stop_price"]
+        logging.info(f"[{pair}] ⛔ Stop price {stop_price:,}€ hitted: placing LIMIT {side.upper()} order",
                         to_telegram=True)
-        return False
-    
-    return True
+        
+        # Recalculate volume based on current portfolio
+        current_price = last_prices[pair]
+        target_value, current_value, hodl_value = calculate_pair_values(pair, balance, last_prices)
+
+        if side == "sell":
+            # Sell only the amount above hodl value
+            volume = (current_value - hodl_value) / current_price
+            pnl = (current_price - entry_price) / entry_price * 100
+        else:
+            # Buy only the amount needed to reach target value
+            value_needed = target_value - current_value
+            value_available = get_available_fiat(balance, last_prices, trailing_state)
+            volume = min(value_needed, value_available) / current_price
+            pnl = (entry_price - current_price) / entry_price * 100
+
+        closing_order = place_limit_order(pair, side, current_price, volume)
+        if not closing_order:
+            logging.error(f"[{pair}] Failed to place closing order. Aborting close.", to_telegram=True)
+            return
+        logging.info(f"[{pair}] 💸 Closed position: {pnl:+.2f}% result", to_telegram=True)
+
+        pos.update({
+            "volume": round(volume, 8),
+            "closing_price": current_price,
+            "closing_order": closing_order,
+            "closing_time": now_str(),
+            "pnl": round(pnl, 2)
+        })
+    except Exception as e:
+        logging.error(f"[{pair}] Failed to close trailing position: {e}")
