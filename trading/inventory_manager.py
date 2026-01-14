@@ -1,0 +1,65 @@
+from core.config import PAIRS, ASSET_ALLOCATION, FIAT_CODE
+
+def get_fiat_balance(balance: dict) -> float:
+    return float(balance.get(FIAT_CODE, 0.0))
+
+def get_portfolio_value(balance: dict, last_prices: dict) -> float:
+    total_value = 0.0
+    
+    # Convert crypto assets with last prices
+    for pair in PAIRS.keys():
+        asset = PAIRS[pair]["base"]
+        
+        amount = float(balance.get(asset, 0.0))
+        if amount > 0:
+            price = float(last_prices.get(pair))
+            if price is not None:
+                asset_value = amount * price
+                total_value += asset_value
+    
+    # Add fiat balance
+    total_value += get_fiat_balance(balance)
+    
+    return total_value
+
+def get_available_fiat(balance: dict, last_prices: dict, trailing_state: dict) -> float:
+    fiat_balance = get_fiat_balance(balance)
+
+    reserved_fiat = 0.0
+    for pair, pos in trailing_state.items():
+        if not pos or pos.get("side") != "buy":
+            continue
+        volume = float(pos.get("volume", 0.0))
+        price = float(last_prices.get(pair, 0.0))
+        if volume > 0 and price > 0:
+            reserved_fiat += volume * price
+
+    available_fiat = fiat_balance - reserved_fiat
+    return available_fiat if available_fiat > 0 else 0.0
+
+def get_base_value(pair: str, balance: dict, current_price: float) -> float:
+    asset = PAIRS[pair]["base"]
+    amount = float(balance.get(asset, 0.0))
+    if current_price is not None:
+        base_value = amount * current_price
+        return base_value
+    return 0.0
+
+def get_target_value(pair: str, portfolio_value: float) -> float:
+    target_pct = float(ASSET_ALLOCATION[pair].get("TARGET_PCT", 0))
+    target_value = (target_pct / 100.0) * portfolio_value
+    return target_value
+
+def get_hodl_value(pair: str, target_value: float) -> float:
+    hodl_pct = float(ASSET_ALLOCATION[pair].get("HODL_PCT", 0))
+    hodl_value = (hodl_pct / 100.0) * target_value
+    return hodl_value
+
+def calculate_pair_values(pair: str, balance: dict, last_prices: dict) -> tuple[float, float, float]:
+    portfolio_value = get_portfolio_value(balance, last_prices)
+    target_value = get_target_value(pair, portfolio_value)
+    current_price = last_prices[pair]
+    current_value = get_base_value(pair, balance, current_price)
+    hodl_value = get_hodl_value(pair, target_value)
+
+    return target_value, current_value, hodl_value

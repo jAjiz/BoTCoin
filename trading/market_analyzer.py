@@ -13,7 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from core.config import MARKET_ANALYZER, CANDLE_TIMEFRAME
 
 DEFAULT_ORDER = MARKET_ANALYZER["DEFAULT_ORDER"]
-MINIMUN_CHANGE_PCT = MARKET_ANALYZER["MINIMUN_CHANGE_PCT"]
+MINIMUM_CHANGE_PCT = MARKET_ANALYZER["MINIMUM_CHANGE_PCT"]
 
 def get_args():
     args = {'pair': None, 'show_events': False, 'order': DEFAULT_ORDER}
@@ -77,7 +77,7 @@ def detect_pivots(df, order=DEFAULT_ORDER):
             else:
                 del pivots[i]
         elif curr_price != next_price:
-            if abs(curr_price - next_price) / curr_price < MINIMUN_CHANGE_PCT:
+            if abs(curr_price - next_price) / curr_price < MINIMUM_CHANGE_PCT:
                 del pivots[i + 1]
             else:
                 i += 1
@@ -140,7 +140,7 @@ def analyze_structural_noise(df, order=DEFAULT_ORDER, print_results=False, show_
                 downtrend_data.append(event)
     
     if print_results:
-        print(f"--- Analyzing Market Structure (minimum change {MINIMUN_CHANGE_PCT*100:.2f}%) ---")
+        print(f"--- Analyzing Market Structure (minimum change {MINIMUM_CHANGE_PCT*100:.2f}%) ---")
         print_statistics(uptrend_data, "UPTREND NOISE (Stop Loss configuration)")
         print_statistics(downtrend_data, "DOWNTREND NOISE (Reentry Stop configuration)")
         

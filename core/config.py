@@ -19,6 +19,8 @@ CANDLE_TIMEFRAME = int(os.getenv("CANDLE_TIMEFRAME", 15))  # Candle timeframe in
 MARKET_DATA_DAYS = int(os.getenv("MARKET_DATA_DAYS", 60)) # 60 days
 ATR_PERIOD = int(os.getenv("ATR_PERIOD", 14))  # ATR calculation period in candles
 ATR_DESV_LIMIT = float(os.getenv("ATR_DESV_LIMIT", 0.2))  # ATR recalibration limit (20%)
+FIAT_CODE = os.getenv("FIAT_CODE", "ZEUR")  # Fiat currency code
+MIN_COST = float(os.getenv("MIN_COST", 10.0))  # Minimum cost operation in fiat
 
 # Pairs names map and info
 PAIRS = {pair: {} for pair in os.getenv("PAIRS", "").split(",")}
@@ -43,29 +45,20 @@ def _build_trading_params():
 
 TRADING_PARAMS = _build_trading_params()
 
-# Asset minimum allocation
-def _build_asset_min_allocation():
+# Asset allocation
+def _build_asset_allocation():
     allocations = {}
     for pair in PAIRS.keys():
-        allocations[pair] = os.getenv(f"{pair}_MIN_ALLOCATION", 0)
+        allocations[pair] = {
+            "TARGET_PCT": os.getenv(f"{pair}_TARGET_PCT", 0),
+            "HODL_PCT": os.getenv(f"{pair}_HODL_PCT", 0)
+        }
     return allocations
 
-ASSET_MIN_ALLOCATION = _build_asset_min_allocation()
-
-# Recenter settings
-def _build_recenter_params():
-    params = {}
-    for pair in PAIRS.keys():
-        params[pair] = {
-            "ATR_MULT": os.getenv(f"{pair}_RECENTER_ATR_MULT", 0),
-            "PRICE_PCT": os.getenv(f"{pair}_RECENTER_PRICE_PCT", 0)
-        }
-    return params
-
-RECENTER_PARAMS = _build_recenter_params()
+ASSET_ALLOCATION = _build_asset_allocation()
 
 # Market analyzer settings
 MARKET_ANALYZER = {
     "DEFAULT_ORDER": 20,
-    "MINIMUN_CHANGE_PCT": 0.02  # 2%
+    "MINIMUM_CHANGE_PCT": 0.02  # 2%
 }

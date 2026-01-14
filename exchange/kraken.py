@@ -23,9 +23,13 @@ def get_asset_pairs():
         return response.get("result", {})
     except Exception as e:
         logging.error(f"Error fetching asset pairs: {e}")
+        return None
+
 
 def build_pairs_map(pairs_dict):
     pairs_info = get_asset_pairs()
+    if pairs_info is None:
+        return
     for primary, info in pairs_info.items():
         altname = info.get('altname', '')
         if altname in pairs_dict:
@@ -40,6 +44,7 @@ def build_pairs_map(pairs_dict):
         for pair in missing:
             del pairs_dict[pair]
 
+
 def get_balance():
     try:
         response = api.query_private("Balance")
@@ -48,32 +53,34 @@ def get_balance():
         return response.get("result", {})
     except Exception as e:
         logging.error(f"Error fetching balance: {e}")
-        return {}
+        return None
 
-def get_closed_orders(start=0, closed_after=0):
+
+def get_order_status(order_id):
     try:
-        response = api.query_private("ClosedOrders", { "start": start })
+        response = api.query_private("QueryOrders", {"txid": order_id})
         if "error" in response and response["error"]:
             raise Exception(response["error"])
-        closed_orders = response.get("result", {}).get("closed", {})
-        closed_orders = {
-            oid: o for oid, o in closed_orders.items() 
-            if o.get("status") == "closed" and o.get("closetm", 0) >= closed_after
-        }
-        return closed_orders
+        result = response.get("result", {})
+        return result.get(order_id, {}).get("status")
     except Exception as e:
-        logging.error(f"Error fetching closed orders: {e}")
-        return {}
+        logging.error(f"Error fetching order status for {order_id}: {e}")
+        return None
 
-def get_last_price(pair):
+
+def get_last_prices(pairs_dict):
     try:
-        response = api.query_public("Ticker", {"pair": pair})
+        response = api.query_public("Ticker", {"pair": ",".join(pairs_dict.keys())})
         if "error" in response and response["error"]:
             raise Exception(response["error"])
-        return float(response["result"][pair]["c"][0])  # 'c' = last trade price
+        prices = {}
+        for pair, info in pairs_dict.items():
+            prices[pair] = float(response["result"][info['primary']]["c"][0])  # 'c' = last trade price
+        return prices
     except Exception as e:
         logging.error(f"Error fetching current price for {pair}: {e}")
         return None
+
 
 def place_limit_order(pair, side, price, volume):
     try:
@@ -91,7 +98,9 @@ def place_limit_order(pair, side, price, volume):
         return new_order
     except Exception as e:
         logging.error(f"Error creating {side.upper()} order: {e}")
+        return None
     
+
 def get_current_atr(pair):
     try:
         atr_file = f"data/{pair}_ohlc_data_{CANDLE_TIMEFRAME}min.csv"
@@ -130,6 +139,7 @@ def get_current_atr(pair):
     except Exception as e:
         logging.error(f"Error getting ATR for {pair}: {e}")
         return None
+
 
 if __name__ == "__main__":
     print(get_balance())
