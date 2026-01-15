@@ -103,7 +103,7 @@ class TelegramInterface:
                     msg += (
                         f"━━━ {pair} ━━━\n"
                         f"Price: {price:,.2f}€\n"
-                        f"ATR(15m): {atr:,.2f}€ ({volatility_level})\n"
+                        f"ATR: {atr:,.2f}€ ({volatility_level})\n"
                         f"Balance: {asset_balance:.8f} ({asset_value_eur:,.2f}€)\n\n"
                     )
                     if len(pairs_to_show) > 1:
@@ -112,7 +112,7 @@ class TelegramInterface:
                     msg += f"━━━ {pair} ━━━\n❌ Error: {e}\n\n"
             
             fiat_balance = float(balance.get("ZEUR", 0))
-            msg += f"💵 EUR Balance: {fiat_balance:,.2f}€"
+            msg += f"EUR Balance: {fiat_balance:,.2f}€"
             
             await update.message.reply_text(msg)
         except Exception as e:
@@ -137,59 +137,47 @@ class TelegramInterface:
                 last_price = pair_data.get('last_price', 0)
                 msg += f"━━━ {pair} (Last price: {last_price:,.2f}€) ━━━\n"
 
-                pair_positions = all_positions.get(pair, {})
-                if not pair_positions:
-                    msg += "ℹ️ No open positions for this pair.\n\n"
+                pos = all_positions.get(pair)
+                if not pos:
+                    msg += "⚠️ No open position for this pair.\n\n"
                     continue
                 
-                for pos_id, pos in pair_positions.items():
-                    trailing_active = pos.get('trailing_price') is not None
+                trailing_active = pos.get('trailing_price') is not None
+                side = pos['side'].lower()
+                estimated_value = pos['volume'] * last_price
+                entry_price = pos['entry_price']
+                activation_price = pos['activation_price']
 
-                    side = pos['side'].lower()
-                    entry_price = pos['entry_price']
-                    activation_price = pos['activation_price']
+                # Base lines
+                base_lines = [
+                    f"{pos['side'].upper()}",
+                    f"Volume: {pos['volume']:,.8f} ({estimated_value:,.2f}€)",
+                    f"Entry: {entry_price:,.2f}€",
+                    f"Activation: {activation_price:,.2f}€"
+                ]                
 
-                    # Base lines
-                    base_lines = [
-                        f"{pos['side'].upper()} | ID: {pos_id}",
-                        f"Entry: {entry_price:,.2f}€",
-                    ]
+                if trailing_active:
+                    # Active: show full trailing info and P&L
+                    stop_price = pos['stop_price']
 
-                    # Show either volume or cost depending on side
                     if side == 'sell':
-                        estimated_value = pos['volume'] * last_price
-                        base_lines.append(f"Volume: {pos['volume']:,.8f} ({estimated_value:,.2f}€)")
-                    elif side == 'buy':
-                        estimated_volume = pos['cost'] / last_price
-                        base_lines.append(f"Cost: {pos['cost']:,.2f}€ ({estimated_volume:,.8f})")
-
-                    if not trailing_active:
-                        # Not active: show activation only
-                        base_lines.append(f"Activation: {activation_price:,.2f}€")
-                        msg += "\n".join(base_lines) + "\n\n"
+                        estimated_pnl = (stop_price - entry_price) / entry_price * 100
                     else:
-                        # Active: show full trailing info and P&L
-                        trailing_price = pos['trailing_price']
-                        stop_price = pos['stop_price']
+                        estimated_pnl = (entry_price - stop_price) / entry_price * 100
 
-                        if side == 'sell':
-                            estimated_pnl = (stop_price - entry_price) / entry_price * 100
-                        else:
-                            estimated_pnl = (entry_price - stop_price) / entry_price * 100
+                    pnl_symbol = "🟢" if estimated_pnl > 0 else "🔴"
 
-                        pnl_symbol = "🟢" if estimated_pnl > 0 else "🔴"
+                    base_lines.extend([
+                        f"Trailing: {pos['trailing_price']:,.2f}€",
+                        f"Stop: {stop_price:,.2f}€",
+                        f"PnL: {pnl_symbol} {estimated_pnl:+.2f}%",
+                    ])
 
-                        base_lines.extend([
-                            f"Activation: {activation_price:,.2f}€",
-                            f"Trailing: {trailing_price:,.2f}€",
-                            f"Stop: {stop_price:,.2f}€",
-                            f"PnL: {pnl_symbol} {estimated_pnl:+.2f}%",
-                        ])
-                        msg += "\n".join(base_lines) + "\n\n"
+                msg += "\n".join(base_lines) + "\n\n"
 
             await update.message.reply_text(msg)
         except FileNotFoundError:
-            await update.message.reply_text("ℹ️ No positions file found.")
+            await update.message.reply_text("⚠️ No positions file found.")
         except Exception as e:
             logging.error(f"Error in positions_command: {e}")
             await update.message.reply_text(f"❌ Error fetching positions: {e}")

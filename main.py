@@ -2,7 +2,7 @@ import time
 import sys
 import core.logging as logging
 import core.runtime as runtime
-# import services.telegram as telegram
+import services.telegram as telegram
 from trading.parameters_manager import calculate_trading_parameters, get_volatility_level
 from trading.positions_manager import create_position, update_activation_price, update_stop_price, close_position
 from exchange.kraken import get_balance, get_last_prices, get_current_atr, get_order_status
@@ -17,14 +17,14 @@ def main():
         sys.exit(1)
     
     try:
-        # telegram.initialize_telegram()
+        telegram.initialize_telegram()
         session_count = 0
 
         while True:
-            # if telegram.BOT_PAUSED:
-            #     logging.info("Bot is paused. Sleeping...\n")
-            #     time.sleep(SLEEPING_INTERVAL)
-            #     continue
+            if telegram.BOT_PAUSED:
+                logging.info("Bot is paused. Sleeping...\n")
+                time.sleep(SLEEPING_INTERVAL)
+                continue
 
             logging.info("======== STARTING SESSION ========")
             trailing_state = load_trailing_state()
@@ -82,8 +82,8 @@ def main():
         logging.error(f"BoTC encountered an error: {e}\n", to_telegram=True)
     except KeyboardInterrupt:
         logging.info("BoTC stopped manually by user.\n", to_telegram=True)
-    # finally:
-    #     telegram.stop_telegram_thread()  
+    finally:
+        telegram.stop_telegram_thread()  
 
 def check_closed_positions(pair, trailing_state):
     if pair not in trailing_state or not trailing_state[pair]:
