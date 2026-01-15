@@ -6,7 +6,7 @@ _lock = threading.Lock()
 _shared_data = {
     "last_balance": {},
     "pairs_data": {},  # {pair: {"last_price": float, "atr": float}}
-    "trailing_state": {}  # {pair: {order_id: position_data}}
+    "trailing_state": {}  # {pair: position_data}
 }
 
 def update_balance(balance):

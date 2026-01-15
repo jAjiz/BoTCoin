@@ -20,7 +20,7 @@ MARKET_DATA_DAYS = int(os.getenv("MARKET_DATA_DAYS", 60)) # 60 days
 ATR_PERIOD = int(os.getenv("ATR_PERIOD", 14))  # ATR calculation period in candles
 ATR_DESV_LIMIT = float(os.getenv("ATR_DESV_LIMIT", 0.2))  # ATR recalibration limit (20%)
 FIAT_CODE = os.getenv("FIAT_CODE", "ZEUR")  # Fiat currency code
-MIN_COST = float(os.getenv("MIN_COST", 10.0))  # Minimum cost operation in fiat
+MIN_VALUE = float(os.getenv("MIN_VALUE", 10))  # Minimum value operation in fiat
 
 # Pairs names map and info
 PAIRS = {pair: {} for pair in os.getenv("PAIRS", "").split(",")}

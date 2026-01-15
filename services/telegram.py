@@ -1,7 +1,7 @@
 import threading, time, logging, asyncio, requests
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler
-from core.config import TELEGRAM_TOKEN, TELEGRAM_USER_ID, TELEGRAM_POLL_INTERVAL, PAIRS
+from core.config import TELEGRAM_TOKEN, TELEGRAM_USER_ID, TELEGRAM_POLL_INTERVAL, PAIRS, FIAT_CODE
 from core.runtime import get_last_balance, get_pair_data, get_trailing_state
 
 BOT_PAUSED = False
@@ -111,8 +111,8 @@ class TelegramInterface:
                 except Exception as e:
                     msg += f"━━━ {pair} ━━━\n❌ Error: {e}\n\n"
             
-            fiat_balance = float(balance.get("ZEUR", 0))
-            msg += f"EUR Balance: {fiat_balance:,.2f}€"
+            fiat_balance = float(balance.get(FIAT_CODE, 0.0))
+            msg += f"{FIAT_CODE} Balance: {fiat_balance:,.2f}€"
             
             await update.message.reply_text(msg)
         except Exception as e:

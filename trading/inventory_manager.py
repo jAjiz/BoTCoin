@@ -12,10 +12,12 @@ def get_portfolio_value(balance: dict, last_prices: dict) -> float:
         
         amount = float(balance.get(asset, 0.0))
         if amount > 0:
-            price = float(last_prices.get(pair))
-            if price is not None:
-                asset_value = amount * price
-                total_value += asset_value
+            raw_price = last_prices.get(pair)
+            if raw_price is None:
+                continue
+            price = float(raw_price)
+            asset_value = amount * price
+            total_value += asset_value
     
     # Add fiat balance
     total_value += get_fiat_balance(balance)
@@ -30,7 +32,10 @@ def get_available_fiat(balance: dict, last_prices: dict, trailing_state: dict) -
         if not pos or pos.get("side") != "buy":
             continue
         volume = float(pos.get("volume", 0.0))
-        price = float(last_prices.get(pair, 0.0))
+        raw_price = last_prices.get(pair)
+        if raw_price is None:
+            continue
+        price = float(raw_price)
         if volume > 0 and price > 0:
             reserved_fiat += volume * price
 
@@ -63,3 +68,26 @@ def calculate_pair_values(pair: str, balance: dict, last_prices: dict) -> tuple[
     hodl_value = get_hodl_value(pair, target_value)
 
     return target_value, current_value, hodl_value
+
+
+def calculate_position(pair: str, balance: dict, last_prices: dict, trailing_state: dict, force_side=None):
+    target_value, current_value, hodl_value = calculate_pair_values(pair, balance, last_prices)
+
+    # Exclude self from trailing state to avoid double counting reserved fiat
+    ts_excluding_self = dict(trailing_state or {})
+    ts_excluding_self.pop(pair, None)
+
+    # Sell value is amount above hodl, buy value is amount needed to reach target 
+    sell_value = max(0.0, float(current_value) - float(hodl_value))
+    buy_value = max(
+        0.0,
+        min(
+            max(0.0, float(target_value) - float(current_value)),
+            max(0.0, float(get_available_fiat(balance, last_prices, ts_excluding_self))),
+        ),
+    )
+
+    if force_side in ("buy", "sell"):
+        return ("buy", buy_value) if force_side == "buy" else ("sell", sell_value)
+
+    return ("buy", buy_value) if buy_value > sell_value else ("sell", sell_value)

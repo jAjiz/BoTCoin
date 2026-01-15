@@ -78,7 +78,7 @@ def get_last_prices(pairs_dict):
             prices[pair] = float(response["result"][info['primary']]["c"][0])  # 'c' = last trade price
         return prices
     except Exception as e:
-        logging.error(f"Error fetching current price for {pair}: {e}")
+        logging.error(f"Error fetching current prices: {e}")
         return None
 
 
