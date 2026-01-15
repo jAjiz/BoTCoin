@@ -1,4 +1,5 @@
 import threading
+import copy
 
 # Thread-safe shared data between main thread and Telegram thread
 _lock = threading.Lock()
@@ -38,5 +39,4 @@ def update_trailing_state(trailing_state):
 def get_trailing_state():
     with _lock:
         # Return a deep copy to avoid modifications from the reading thread
-        import copy
         return copy.deepcopy(_shared_data["trailing_state"])
