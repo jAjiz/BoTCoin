@@ -1,34 +1,24 @@
 import core.logging as logging
-from trading.inventory_manager import calculate_pair_values, get_available_fiat
+from trading.inventory_manager import calculate_position
 from trading.parameters_manager import get_k_stop
 from core.utils import now_str
-from core.config import TRADING_PARAMS, MIN_COST
+from core.config import TRADING_PARAMS, MIN_VALUE
 from core.state import load_closed_positions
 from exchange.kraken import place_limit_order
 
 def create_position(pair, balance, last_prices, atr_val, trailing_state):
     current_price = last_prices[pair]
-    target_value, current_value, hodl_value = calculate_pair_values(pair, balance, last_prices)
-    
-    # if current value is greater than value needed to reach target, we sell
-    if current_value > (target_value - current_value):
-        side = "sell"
-        # Sell volume is the excess over hodl value
-        volume = (current_value - hodl_value) / current_price
-    else:
-        side = "buy"
-        # Buy volume is the deficit to reach target value
-        value_needed = target_value - current_value
-        value_available = get_available_fiat(balance, last_prices, trailing_state)
-        volume = min(value_needed, value_available) / current_price
-
-    # Validate minimum position cost
-    position_cost = volume * current_price
-    if position_cost < MIN_COST:
+    side, value = calculate_position(pair, balance, last_prices, trailing_state)
+    if value < MIN_VALUE:
         logging.info(f"[{pair}] Cannot create {side.upper()} position: "
-                     f"cost {position_cost:.1f}€ < minimum {MIN_COST:.1f}€")
+                     f"value {value:.1f}€ < minimum {MIN_VALUE:.1f}€")
         return
-
+    
+    volume = value / current_price if current_price else 0.0
+    if volume <= 0:
+        logging.warning(f"[{pair}] Cannot create {side.upper()} position: volume {volume:.8f} <= 0")
+        return
+    
     # Get entry_price from last closed position with opposite side
     entry_price = current_price
     closed_positions = load_closed_positions()
@@ -109,22 +99,28 @@ def close_position(pair, pos, balance, last_prices, trailing_state):
         side = pos["side"]
         entry_price = pos["entry_price"]
         stop_price = pos["stop_price"]
+        current_price = last_prices[pair]
         logging.info(f"[{pair}] ⛔ Stop price {stop_price:,}€ hitted: placing LIMIT {side.upper()} order",
                         to_telegram=True)
         
-        # Recalculate volume based on current portfolio
-        current_price = last_prices[pair]
-        target_value, current_value, hodl_value = calculate_pair_values(pair, balance, last_prices)
+        def _drop_position(reason: str):
+            logging.warning(f"[{pair}] Dropping {side.upper()} position: {reason}", to_telegram=True)
+            if pair in trailing_state:
+                del trailing_state[pair]
+
+        _, value = calculate_position(pair, balance, last_prices, trailing_state, force_side=side)
+        if value < MIN_VALUE:
+            _drop_position(f"value {value:.1f}€ < minimum {MIN_VALUE:.1f}€")
+            return
+
+        volume = value / current_price if current_price else 0.0
+        if volume <= 0:
+            _drop_position(f"volume {volume:.8f} <= 0")
+            return
 
         if side == "sell":
-            # Sell only the amount above hodl value
-            volume = (current_value - hodl_value) / current_price
             pnl = (current_price - entry_price) / entry_price * 100
         else:
-            # Buy only the amount needed to reach target value
-            value_needed = target_value - current_value
-            value_available = get_available_fiat(balance, last_prices, trailing_state)
-            volume = min(value_needed, value_available) / current_price
             pnl = (entry_price - current_price) / entry_price * 100
 
         closing_order = place_limit_order(pair, side, current_price, volume)
