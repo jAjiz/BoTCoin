@@ -1,10 +1,10 @@
 import core.logging as logging
+from core.config import MIN_VALUE, TRADING_PARAMS
+from core.state import load_closed_positions
+from core.utils import now_str
+from exchange.kraken import place_limit_order
 from trading.inventory_manager import calculate_position
 from trading.parameters_manager import get_k_stop
-from core.utils import now_str
-from core.config import TRADING_PARAMS, MIN_VALUE
-from core.state import load_closed_positions
-from exchange.kraken import place_limit_order
 
 def create_position(pair, balance, last_prices, atr_val, trailing_state):
     current_price = last_prices[pair]
@@ -91,7 +91,30 @@ def update_stop_price(pair, pos, trailing_price, atr_val):
         "stop_atr": round(atr_val, 1)
     })
 
-def close_position(pair, pos, balance, last_prices, trailing_state):
+
+def refresh_position(pair, pos, balance, last_prices, trailing_state) -> bool:
+    side = pos["side"]
+    current_price = last_prices[pair]
+
+    def _drop_position(reason: str):
+        logging.warning(f"Dropping {side.upper()} position: {reason}", to_telegram=True)
+        if pair in trailing_state:
+            del trailing_state[pair]
+
+    _, value = calculate_position(pair, balance, last_prices, trailing_state, force_side=side)
+    if value < MIN_VALUE:
+        _drop_position(f"value {value:.1f}€ < minimum {MIN_VALUE:.1f}€")
+        return False
+
+    volume = value / current_price if current_price else 0.0
+    if volume <= 0:
+        _drop_position(f"volume {volume:.8f} <= 0")
+        return False
+
+    pos["volume"] = round(volume, 8)
+    return True
+
+def close_position(pair, pos, last_prices):
     try:
         side = pos["side"]
         entry_price = pos["entry_price"]
@@ -99,21 +122,8 @@ def close_position(pair, pos, balance, last_prices, trailing_state):
         current_price = last_prices[pair]
         logging.info(f"[{pair}] ⛔ Stop price {stop_price:,}€ hitted: placing LIMIT {side.upper()} order",
                         to_telegram=True)
-        
-        def _drop_position(reason: str):
-            logging.warning(f"Dropping {side.upper()} position: {reason}", to_telegram=True)
-            if pair in trailing_state:
-                del trailing_state[pair]
 
-        _, value = calculate_position(pair, balance, last_prices, trailing_state, force_side=side)
-        if value < MIN_VALUE:
-            _drop_position(f"value {value:.1f}€ < minimum {MIN_VALUE:.1f}€")
-            return
-
-        volume = value / current_price if current_price else 0.0
-        if volume <= 0:
-            _drop_position(f"volume {volume:.8f} <= 0")
-            return
+        volume = float(pos.get("volume", 0.0))
 
         if side == "sell":
             pnl = (current_price - entry_price) / entry_price * 100
