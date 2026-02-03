@@ -3,13 +3,19 @@ import sys
 import core.logging as logging
 import core.runtime as runtime
 import services.telegram as telegram
-from trading.parameters_manager import calculate_trading_parameters, get_volatility_level
-from trading.positions_manager import create_position, update_activation_price, update_stop_price, close_position
 from exchange.kraken import get_balance, get_last_prices, get_current_atr, get_order_status
 from core.state import load_trailing_state, save_trailing_state, save_closed_position
 from core.config import SLEEPING_INTERVAL, PAIRS, PARAM_SESSIONS, ATR_DESV_LIMIT
 from core.validation import validate_config
 from core.utils import now_str
+from trading.parameters_manager import calculate_trading_parameters, get_volatility_level
+from trading.positions_manager import (
+    close_position,
+    create_position,
+    refresh_position,
+    update_activation_price,
+    update_stop_price,
+)
 
 
 def main():
@@ -118,6 +124,9 @@ def update_trailing_state(pair, current_balance, last_prices, current_atr, trail
     atr_limit_max = current_atr * (1 + ATR_DESV_LIMIT)
     atr_limit_min = current_atr * (1 - ATR_DESV_LIMIT)
 
+    if not refresh_position(pair, pos, current_balance, last_prices, trailing_state):
+        return
+
     if not trailing_active:
         # Recalibrate activation
         if pos["activation_atr"] < atr_limit_min or pos["activation_atr"] > atr_limit_max:
@@ -142,7 +151,7 @@ def update_trailing_state(pair, current_balance, last_prices, current_atr, trail
         # Stop hit check
         if (side == "sell" and current_price <= pos["stop_price"]) or \
             (side == "buy" and current_price >= pos["stop_price"]):
-            close_position(pair, pos, current_balance, last_prices, trailing_state)
+            close_position(pair, pos, last_prices)
             return
 
         # Update trailing
