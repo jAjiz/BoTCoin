@@ -96,18 +96,28 @@ graph LR
     E --> G[Create SELL Position]
     F --> H[Create BUY Position]
     
-    G --> I[Activation: entry + K_ACT * ATR]
-    H --> J[Activation: entry - K_ACT * ATR]
+    G --> I[Activation: entry + activation_distance]
+    H --> J[Activation: entry - activation_distance]
     
     I --> K[Trailing Stop: activation - K_STOP * ATR]
     J --> L[Trailing Stop: activation + K_STOP * ATR]
+```
+
+**Activation Distance Calculation**:
+```python
+if k_act is not None:
+    # Use K_ACT if defined
+    activation_distance = float(k_act) * atr_val
+else:
+    # Use K_STOP and MIN_MARGIN if K_ACT is not defined
+    activation_distance = k_stop * atr_val + min_margin * entry_price
 ```
 
 ## 📊 Data Analysis & Volatility Regimes
 
 ### Market Data Processing
 
-The system leverages **Pandas DataFrames** for efficient market data manipulation and **Numpy** for vectorized statistical calculations:
+The system uses Pandas DataFrames for efficient market data manipulation and Numpy for vectorized statistical calculations:
 
 - **OHLC Data Ingestion**: Fetches candlestick data from Kraken via `fetch_ohlc_data`
 - **ATR Calculation**: Rolling window calculation using True Range components (H-L, H-PC, L-PC)
@@ -118,13 +128,13 @@ The system leverages **Pandas DataFrames** for efficient market data manipulatio
 
 The system classifies market conditions into **5 volatility levels** based on ATR percentiles:
 
-| Level | Range | Description | Typical Behavior |
-|-------|-------|-------------|------------------|
-| **LL** | < P20 | Very Low Volatility | Tight stops, smaller activation distances |
-| **LV** | P20-P50 | Low Volatility | Standard conservative parameters |
-| **MV** | P50-P80 | Medium Volatility | Balanced risk/reward parameters |
-| **HV** | P80-P95 | High Volatility | Wider stops, increased activation distances |
-| **HH** | > P95 | Very High Volatility | Maximum protection, extreme parameters |
+| Level | Range | Description |
+|-------|-------|-------------|
+| **LL** | < P20 | Very Low Volatility |
+| **LV** | P20-P50 | Low Volatility |
+| **MV** | P50-P80 | Medium Volatility |
+| **HV** | P80-P95 | High Volatility |
+| **HH** | > P95 | Very High Volatility |
 
 **Implementation** (`get_volatility_level`):
 
@@ -180,6 +190,13 @@ The `analyze_structural_noise` function identifies market pivot points and calcu
       "side": "sell",
       "volume": 0.00123456,
       "entry_price": 45000.0,
+      "activation_atr": 1250.0,
+      "activation_price": 47500.0,
+      "creation_time": "2026-02-03 08:15:00",
+      "activation_time": "2026-02-03 10:30:15",
+      "trailing_price": 48200.0,
+      "stop_price": 46950.0,
+      "stop_atr": 1250.0,
       "closing_price": 46950.0,
       "closing_order": "OXY7KL-XXXXX-XXXXXX",
       "closing_time": "2026-02-03 12:45:30",
@@ -201,11 +218,11 @@ The system uses **CSV files as data sinks** for:
 
 ### Kraken API
 
-**Current Scope**: EUR-based trading pairs only
+**Current Scope**: EUR-based trading pairs only (supports multiple pairs simultaneously)
 
 **Key Functions** (`exchange/kraken.py`):
 - `get_balance()`: Retrieves account balances
-- `get_last_prices(pairs)`: Fetches current market prices
+- `get_last_prices(pairs)`: Fetches current market prices for all configured pairs
 - `fetch_ohlc_data(pair, interval, since)`: Downloads historical candlestick data
 - `place_limit_order(pair, side, price, volume)`: Executes limit orders
 - `get_order_status(order_id)`: Checks order execution status
@@ -213,7 +230,6 @@ The system uses **CSV files as data sinks** for:
 **Modular Design**: The architecture supports future expansion to:
 - Other exchanges (Binance, Coinbase, etc.)
 - Additional fiat currencies (USD, GBP, etc.)
-- More trading pairs
 
 ## 📱 Telegram Integration
 
@@ -236,7 +252,6 @@ The system sends real-time notifications for:
 - ✅ Bot startup and configuration
 - 🆕 New position creation
 - ⚡ Position activation (trailing start)
-- 📈 Trailing price updates
 - 💸 Position closure with P&L
 - ⚠️ System errors and warnings
 
@@ -300,6 +315,8 @@ MARKET_DATA_DAYS=60            # Historical data window
 ATR_PERIOD=14                  # ATR calculation period
 ATR_DESV_LIMIT=0.2            # Recalibration threshold (20%)
 MIN_VALUE=10                   # Minimum operation value (EUR)
+TELEGRAM_POLL_INTERVAL=0       # Telegram polling interval in seconds (0 = default)
+MINIMUM_CHANGE_PCT=0.02        # Minimum price change for pivot detection (2%)
 ```
 
 **Trading Pairs**:
@@ -314,12 +331,25 @@ XBTEUR_HODL_PCT=20             # Minimum hold percentage (don't sell below)
 ```
 
 **Trading Parameters** (per pair and side):
-```bash
-XBTEUR_SELL_K_ACT=2.0          # Activation coefficient (multiplies ATR)
-XBTEUR_SELL_MIN_MARGIN=0.006   # Minimum profit margin (0.6%)
-XBTEUR_BUY_K_ACT=1.5           # Buy activation coefficient
 
-# Stop percentiles per volatility level
+Configuration can be done in two ways:
+
+1. **Common for both sides** (simpler):
+```bash
+XBTEUR_K_ACT=2.0               # Activation coefficient for both BUY and SELL
+XBTEUR_MIN_MARGIN=0.006        # Minimum margin for both BUY and SELL (0.6%)
+```
+
+2. **Independent per side** (more control):
+```bash
+XBTEUR_SELL_K_ACT=2.0          # Sell activation coefficient (multiplies ATR)
+XBTEUR_SELL_MIN_MARGIN=0.006   # Minimum profit margin for SELL (0.6%)
+XBTEUR_BUY_K_ACT=1.5           # Buy activation coefficient
+XBTEUR_BUY_MIN_MARGIN=0.003    # Minimum profit margin for BUY (0.3%)
+```
+
+**Stop Loss Configuration** (per volatility level):
+```bash
 XBTEUR_STOP_PCT_LL=0.90        # 90th percentile for Very Low Volatility
 XBTEUR_STOP_PCT_LV=0.90        # 90th percentile for Low Volatility
 XBTEUR_STOP_PCT_MV=0.90        # 90th percentile for Medium Volatility
@@ -367,6 +397,42 @@ jobs:
 4. Remote script pulls latest code
 5. Service restart with zero downtime
 
+### Configuration Validation & Logging
+
+The system performs comprehensive validation on startup and provides detailed logging throughout operation:
+
+**Startup Validation**:
+```
+[INFO] ═══════════════════════════════════════════════════════════
+[INFO] ═══ CONFIGURATION VALIDATED SUCCESSFULLY
+[INFO] ═══════════════════════════════════════════════════════════
+[INFO] Telegram polling interval: 10s
+[INFO] Session interval: 60s
+[INFO] Parameter calculation sessions: 720
+[INFO] Candle timeframe: 15min
+[INFO] Market data storage: 120 days
+[INFO] ATR period: 14 candles
+[INFO] Pairs to trade: XBTEUR, ETHEUR
+[INFO] ═══════════════════════════════════════════════════════════
+```
+
+**Session Logs**: Each trading session provides detailed information:
+```
+[INFO] ═══════ STARTING SESSION ═══════
+[INFO] --- Processing pair: [XBTEUR] ---
+[INFO] Calculating trading parameters...
+[INFO] ATR percentiles → P20:100.0€ | P50:174.2€ | P80:291.9€ | P95:462.5€
+[INFO] K_STOP_SELL → LL:4.20 | LV:3.10 | MV:4.60 | HV:1.60 | HH:1.40
+[INFO] K_STOP_BUY  → LL:4.20 | LV:3.10 | MV:4.60 | HV:6.50 | HH:1.30
+[INFO] Market: 66,293.9€ | ATR: 228.5€ (MV)
+```
+
+All logs include timestamps and are organized by:
+- **Configuration validation**: System settings and pair configuration
+- **Parameter calculation**: ATR percentiles and K_STOP values per volatility level
+- **Market state**: Current price, ATR, and volatility classification
+- **Position events**: Creation, activation, recalibration, and closure
+
 ## 🚀 Quick Start
 
 ### Prerequisites
@@ -378,7 +444,7 @@ pip install -r requirements.txt
 **Dependencies**:
 - `pandas` & `numpy`: Data analysis and vectorized calculations
 - `scipy`: Statistical signal processing for pivot detection
-- `pykrakenapi` & `krakenex`: Kraken exchange integration
+- `krakenex`: Kraken exchange integration
 - `python-telegram-bot`: Telegram bot interface
 - `python-dotenv`: Environment configuration management
 
@@ -414,7 +480,7 @@ python trading/optimize_params.py PAIR=XBTEUR MODE=CONSERVATIVE FEE_PCT=0.26
 
 **Backtest Strategy**:
 ```bash
-python trading/backtest.py PAIR=XBTEUR FEE_PCT=0.26 START=2025-01-01
+python trading/backtest.py PAIR=XBTEUR FEE_PCT=0.26
 ```
 
 ## 📈 Project Structure
@@ -508,8 +574,7 @@ This project is for educational and portfolio demonstration purposes.
 ---
 
 **Author**: [jAjiz](https://github.com/jAjiz)  
-**Repository**: [BoTCoin](https://github.com/jAjiz/BoTCoin)  
-**LinkedIn**: [Portfolio Project - Autonomous Trading System]
+**Repository**: [BoTCoin](https://github.com/jAjiz/BoTCoin)
 
 ---
 
