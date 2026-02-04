@@ -477,9 +477,9 @@ pip install -r requirements.txt
 KRAKEN_API_KEY=your_api_key
 KRAKEN_API_SECRET=your_api_secret
 
-# Telegram Bot Credentials
-TELEGRAM_TOKEN=your_bot_token
-TELEGRAM_USER_ID=your_telegram_id
+# Telegram Bot Credentials (obtain from @BotFather)
+TELEGRAM_TOKEN=your_bot_token              # Bot token from @BotFather
+TELEGRAM_USER_ID=your_telegram_id          # Your numeric Telegram user ID
 
 # System Settings
 SLEEPING_INTERVAL=60
@@ -489,8 +489,8 @@ MARKET_DATA_DAYS=60
 ATR_PERIOD=14
 ATR_DESV_LIMIT=0.2
 MIN_VALUE=10
-TELEGRAM_POLL_INTERVAL=0
-MINIMUM_CHANGE_PCT=0.02
+TELEGRAM_POLL_INTERVAL=0                   # 0 = default polling, >0 = custom interval in seconds
+MINIMUM_CHANGE_PCT=0.02                    # Minimum 2% price change for pivot detection
 
 # Trading Pairs
 PAIRS=XBTEUR,ETHEUR
