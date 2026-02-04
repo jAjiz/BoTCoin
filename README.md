@@ -32,7 +32,9 @@ The system implements a **balance-majority decision logic**:
    - Analyzes portfolio balance between asset and cash
    - If **asset predominates** → prioritizes **SELL** positions
    - If **cash predominates** → prioritizes **BUY** positions
-   - Calculates activation price based on K_ACT (activation coefficient) or K_STOP + MIN_MARGIN
+   - Calculates activation price based on:
+     - Activation coefficient (`K_ACT`)
+     - Stop coefficient + margin (`K_STOP + MIN_MARGIN`)
 
 2. **Position Management** (`update_trailing_state`):
    - **Pre-Activation Phase**: Monitors activation price and recalibrates if ATR changes significantly
@@ -40,7 +42,7 @@ The system implements a **balance-majority decision logic**:
    - **Dynamic Recalibration**: Adjusts stop distances when ATR deviates beyond `ATR_DESV_LIMIT`
 
 3. **Position Closure** (`close_position`):
-   - Executes limit orders when stop price is hit
+   - Executes limit orders when stop price is hit (lower fees than market orders)
    - Calculates and logs P&L (Profit/Loss percentage)
    - Persists closed position data for historical analysis
 
@@ -101,16 +103,6 @@ graph LR
     J --> L[Trailing Stop: activation + K_STOP * ATR]
 ```
 
-**Activation Distance Calculation**:
-```python
-if k_act is not None:
-    # Use K_ACT if defined
-    activation_distance = float(k_act) * atr_val
-else:
-    # Use K_STOP and MIN_MARGIN if K_ACT is not defined
-    activation_distance = k_stop * atr_val + min_margin * entry_price
-```
-
 ## 📊 Data Analysis & Volatility Regimes
 
 ### Market Data Processing
@@ -132,22 +124,10 @@ The system classifies market conditions into **5 volatility levels** based on AT
 | **LV** | P20-P50 | Low Volatility |
 | **MV** | P50-P80 | Medium Volatility |
 | **HV** | P80-P95 | High Volatility |
+| **HV** | P80-P95 | High Volatility |
 | **HH** | > P95 | Very High Volatility |
 
-**Implementation** (`get_volatility_level`):
-
-```python
-def get_volatility_level(pair, atr_val):
-    if atr_val < PAIRS[pair]["atr_20pct"]:
-        return "LL"
-    elif atr_val < PAIRS[pair]["atr_50pct"]:
-        return "LV"
-    elif atr_val < PAIRS[pair]["atr_80pct"]:
-        return "MV"
-    elif atr_val < PAIRS[pair]["atr_95pct"]:
-        return "HV"
-    return "HH"
-```
+The system determines the current volatility level for each pair by comparing the calculated ATR against these percentile thresholds.
 
 ### Structural Noise Analysis
 
