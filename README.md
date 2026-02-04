@@ -668,6 +668,7 @@ This project is for educational and portfolio demonstration purposes.
 
 **Built with data-driven decision making and continuous operation in mind.**
 
+<!-- Social badges - These point to the original repository -->
 [![GitHub Stars](https://img.shields.io/github/stars/jAjiz/BoTCoin?style=social)](https://github.com/jAjiz/BoTCoin/stargazers)
 [![GitHub Forks](https://img.shields.io/github/forks/jAjiz/BoTCoin?style=social)](https://github.com/jAjiz/BoTCoin/network/members)
 
