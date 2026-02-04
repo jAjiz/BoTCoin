@@ -1,6 +1,38 @@
 # BoTCoin - Autonomous Digital Asset Manager
 
+<div align="center">
+
+![Python](https://img.shields.io/badge/python-3.x-blue.svg)
+![License](https://img.shields.io/badge/license-Educational-green.svg)
+![Status](https://img.shields.io/badge/status-Active-success.svg)
+![Platform](https://img.shields.io/badge/platform-GCP-blue.svg)
+
+</div>
+
 BoTCoin is a 24/7 autonomous digital asset management system that analyzes market conditions in real-time and dynamically adapts trading behavior based on measured volatility. The system integrates with Kraken exchange and provides real-time monitoring and alerts through Telegram.
+
+---
+
+## 📑 Table of Contents
+
+- [System Overview](#-system-overview)
+- [Architecture & Trading Engine](#-architecture--trading-engine)
+- [Data Analysis & Volatility Regimes](#-data-analysis--volatility-regimes)
+- [Persistence & Data Structure](#-persistence--data-structure)
+- [Exchange Integration](#-exchange-integration)
+- [Telegram Integration](#-telegram-integration)
+- [Simulation & Optimization](#-simulation--optimization)
+- [Configuration & Deployment](#-configuration--deployment)
+- [Quick Start](#-quick-start)
+- [Project Structure](#-project-structure)
+- [Security Considerations](#-security-considerations)
+- [Performance Metrics](#-performance-metrics)
+- [Technical Highlights](#-technical-highlights)
+- [Roadmap](#-roadmap)
+- [Contributing](#-contributing)
+- [License & Disclaimer](#-license--disclaimer)
+
+---
 
 ## 🎯 System Overview
 
@@ -12,7 +44,7 @@ BoTCoin operates as an autonomous trading agent that:
 - **Risk Management**: Implements trailing stop mechanisms with volatility-adjusted distances
 - **Real-Time Monitoring**: Telegram integration for commands, alerts, and position tracking
 
-### Key Features
+### ✨ Key Features
 
 - 📊 **Real-Time Market Analysis** using Pandas DataFrames and Numpy vectorized calculations
 - 🎚️ **5-Level Volatility Classification** (LL, LV, MV, HV, HH) based on ATR percentiles
@@ -565,17 +597,78 @@ All data persists in CSV format for:
 - **Trailing Stop**: Price-following mechanism with volatility adaptation
 - **Balance-Majority Logic**: Portfolio-driven decision making
 
+## 🗺️ Roadmap
+
+### Current Features
+- ✅ Multi-pair trading support (EUR-based)
+- ✅ Volatility-adaptive trading strategy
+- ✅ Telegram bot interface
+- ✅ Automated CI/CD deployment
+- ✅ Backtesting and optimization tools
+- ✅ Real-time market analysis with ATR
+
+### Future Enhancements
+- 🔮 Support for additional exchanges (Binance, Coinbase)
+- 🔮 Multi-currency support (USD, GBP, etc.)
+- 🔮 Web dashboard for monitoring
+- 🔮 Machine learning-based parameter optimization
+- 🔮 Advanced risk management features
+- 🔮 Portfolio rebalancing automation
+- 🔮 Integration with DeFi protocols
+- 🔮 Mobile app for iOS/Android
+
+## 🤝 Contributing
+
+Contributions are welcome! This project is primarily for educational purposes, but improvements and suggestions are appreciated.
+
+### How to Contribute
+
+1. **Fork the repository**
+2. **Create a feature branch** (`git checkout -b feature/amazing-feature`)
+3. **Commit your changes** (`git commit -m 'Add some amazing feature'`)
+4. **Push to the branch** (`git push origin feature/amazing-feature`)
+5. **Open a Pull Request**
+
+### Development Guidelines
+
+- Follow existing code style and patterns
+- Add tests for new features when applicable
+- Update documentation for significant changes
+- Keep commits focused and well-described
+- Test with paper trading before live deployment
+
+### Reporting Issues
+
+If you encounter bugs or have feature requests:
+
+1. Check existing issues to avoid duplicates
+2. Provide detailed description with steps to reproduce
+3. Include relevant logs and configuration (sanitize sensitive data)
+4. Specify your environment (Python version, OS, etc.)
+
+## 📞 Contact & Support
+
+- **Author**: [jAjiz](https://github.com/jAjiz)
+- **Repository**: [BoTCoin](https://github.com/jAjiz/BoTCoin)
+- **Issues**: [GitHub Issues](https://github.com/jAjiz/BoTCoin/issues)
+
+For questions, suggestions, or collaboration opportunities, feel free to open an issue or reach out through GitHub.
+
 ## 📝 License & Disclaimer
 
 This project is for educational and portfolio demonstration purposes. 
 
 **⚠️ Trading Disclaimer**: Cryptocurrency trading involves substantial risk. This bot operates with real funds and can result in financial loss. Use at your own risk. Past performance does not guarantee future results.
 
----
-
-**Author**: [jAjiz](https://github.com/jAjiz)  
-**Repository**: [BoTCoin](https://github.com/jAjiz/BoTCoin)
+**⚠️ No Financial Advice**: This software is not financial advice. The author is not responsible for any financial losses incurred through the use of this software. Always do your own research and invest responsibly.
 
 ---
 
-*Built with data-driven decision making and continuous operation in mind.*
+<div align="center">
+
+**Built with data-driven decision making and continuous operation in mind.**
+
+[![GitHub Stars](https://img.shields.io/github/stars/jAjiz/BoTCoin?style=social)](https://github.com/jAjiz/BoTCoin/stargazers)
+[![GitHub Forks](https://img.shields.io/github/forks/jAjiz/BoTCoin?style=social)](https://github.com/jAjiz/BoTCoin/network/members)
+
+</div>
