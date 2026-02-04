@@ -58,6 +58,27 @@ The system implements a **balance-majority decision logic**:
      - Activation coefficient (`K_ACT`)
      - Stop coefficient + margin (`K_STOP + MIN_MARGIN`)
 
+### Decision Logic Diagram
+
+```mermaid
+graph LR
+    A[Portfolio Analysis] --> B{Balance Comparison}
+    B -->|Asset Value > Cash| C[SELL Position Priority]
+    B -->|Cash > Asset Value| D[BUY Position Priority]
+    
+    C --> E[Calculate Sell Value<br/>current_value - hodl_value]
+    D --> F[Calculate Buy Value<br/>target_value - current_value<br/>limited by available_fiat]
+    
+    E --> G[Create SELL Position]
+    F --> H[Create BUY Position]
+    
+    G --> I[Activation: entry + activation_distance]
+    H --> J[Activation: entry - activation_distance]
+    
+    I --> K[Trailing Stop: activation - K_STOP * ATR]
+    J --> L[Trailing Stop: activation + K_STOP * ATR]
+```
+
 2. **Position Management** (`update_trailing_state`):
    - **Pre-Activation Phase**: Monitors activation price and recalibrates if ATR changes significantly
    - **Post-Activation Phase**: Implements trailing stop mechanism
@@ -102,27 +123,6 @@ graph TD
     
     Q --> R[Sleep SLEEPING_INTERVAL]
     R --> A
-```
-
-### Decision Logic Diagram
-
-```mermaid
-graph LR
-    A[Portfolio Analysis] --> B{Balance Comparison}
-    B -->|Asset Value > Cash| C[SELL Position Priority]
-    B -->|Cash > Asset Value| D[BUY Position Priority]
-    
-    C --> E[Calculate Sell Value<br/>current_value - hodl_value]
-    D --> F[Calculate Buy Value<br/>target_value - current_value<br/>limited by available_fiat]
-    
-    E --> G[Create SELL Position]
-    F --> H[Create BUY Position]
-    
-    G --> I[Activation: entry + activation_distance]
-    H --> J[Activation: entry - activation_distance]
-    
-    I --> K[Trailing Stop: activation - K_STOP * ATR]
-    J --> L[Trailing Stop: activation + K_STOP * ATR]
 ```
 
 ## 📊 Data Analysis & Volatility Regimes
@@ -593,13 +593,11 @@ Contributions are welcome! This project is primarily for educational purposes, b
 
 Bug reports are also appreciated.
 
-## 📞 Contact & Support
+**Contact**: For questions, suggestions, or collaboration opportunities, feel free to open an issue or reach out through GitHub.
 
 - **Author**: [jAjiz](https://github.com/jAjiz)
 - **Repository**: [BoTCoin](https://github.com/jAjiz/BoTCoin)
 - **Issues**: [GitHub Issues](https://github.com/jAjiz/BoTCoin/issues)
-
-For questions, suggestions, or collaboration opportunities, feel free to open an issue or reach out through GitHub.
 
 ## 📝 License & Disclaimer
 
