@@ -246,6 +246,10 @@ The bot provides real-time interaction through Telegram commands:
 | `/market [pair]` | Display current market data and balances |
 | `/positions [pair]` | Show open positions with P&L estimates |
 
+**Example**: Telegram interface in action
+
+![Telegram Bot Commands](https://github.com/user-attachments/assets/cea99967-4257-42c4-a729-b6576e5c8225)
+
 ### Automated Alerts
 
 The system sends real-time notifications for:
@@ -403,9 +407,9 @@ The system performs comprehensive validation on startup and provides detailed lo
 
 **Startup Validation**:
 ```
-[INFO] ═══════════════════════════════════════════════════════════
-[INFO] ═══ CONFIGURATION VALIDATED SUCCESSFULLY
-[INFO] ═══════════════════════════════════════════════════════════
+[INFO] ============================================================
+[INFO] ✅ CONFIGURATION VALIDATED SUCCESSFULLY
+[INFO] ============================================================
 [INFO] Telegram polling interval: 10s
 [INFO] Session interval: 60s
 [INFO] Parameter calculation sessions: 720
@@ -413,18 +417,32 @@ The system performs comprehensive validation on startup and provides detailed lo
 [INFO] Market data storage: 120 days
 [INFO] ATR period: 14 candles
 [INFO] Pairs to trade: XBTEUR, ETHEUR
-[INFO] ═══════════════════════════════════════════════════════════
+[INFO] ------------------------------------------------------------
 ```
 
 **Session Logs**: Each trading session provides detailed information:
 ```
-[INFO] ═══════ STARTING SESSION ═══════
+[INFO] ======== STARTING SESSION ========
 [INFO] --- Processing pair: [XBTEUR] ---
 [INFO] Calculating trading parameters...
 [INFO] ATR percentiles → P20:100.0€ | P50:174.2€ | P80:291.9€ | P95:462.5€
-[INFO] K_STOP_SELL → LL:4.20 | LV:3.10 | MV:4.60 | HV:1.60 | HH:1.40
-[INFO] K_STOP_BUY  → LL:4.20 | LV:3.10 | MV:4.60 | HV:6.50 | HH:1.30
-[INFO] Market: 66,293.9€ | ATR: 228.5€ (MV)
+[INFO] K_STOP_SELL → LL:2.90 | LV:3.30 | MV:4.30 | HV:1.60 | HH:1.40
+[INFO] K_STOP_BUY  → LL:4.20 | LV:3.10 | MV:4.60 | HV:2.00 | HH:1.30
+[INFO] Market: 66,381.2€ | ATR: 190.0€ (MV)
+[INFO] --- Processing pair: [ETHEUR] ---
+[INFO] Calculating trading parameters...
+[INFO] ATR percentiles → P20:4.8€ | P50:8.0€ | P80:13.5€ | P95:21.7€
+[INFO] K_STOP_SELL → LL:10.60 | LV:3.80 | MV:6.10 | HV:5.50 | HH:2.30
+[INFO] K_STOP_BUY  → LL:11.40 | LV:2.60 | MV:6.50 | HV:6.80 | HH:3.20
+[INFO] Market: 1,948.7€ | ATR: 10.2€ (MV)
+[INFO] Session complete. Sleeping for 60s.
+
+[INFO] ======== STARTING SESSION ========
+[INFO] --- Processing pair: [XBTEUR] ---
+[INFO] Market: 66,429.4€ | ATR: 191.1€ (MV)
+[INFO] --- Processing pair: [ETHEUR] ---
+[INFO] Market: 1,952.1€ | ATR: 10.4€ (MV)
+[INFO] Session complete. Sleeping for 60s.
 ```
 
 All logs include timestamps and are organized by:
@@ -451,9 +469,46 @@ pip install -r requirements.txt
 ### Local Execution
 
 1. **Configure Environment**:
+   
+   Create a `.env` file in the project root with the following variables:
+   
 ```bash
-cp .env.example .env
-# Edit .env with your credentials and settings
+# Kraken API Credentials
+KRAKEN_API_KEY=your_api_key
+KRAKEN_API_SECRET=your_api_secret
+
+# Telegram Bot Credentials
+TELEGRAM_TOKEN=your_bot_token
+TELEGRAM_USER_ID=your_telegram_id
+
+# System Settings
+SLEEPING_INTERVAL=60
+PARAM_SESSIONS=720
+CANDLE_TIMEFRAME=15
+MARKET_DATA_DAYS=60
+ATR_PERIOD=14
+ATR_DESV_LIMIT=0.2
+MIN_VALUE=10
+TELEGRAM_POLL_INTERVAL=0
+MINIMUM_CHANGE_PCT=0.02
+
+# Trading Pairs
+PAIRS=XBTEUR,ETHEUR
+
+# Asset Allocation (per pair)
+XBTEUR_TARGET_PCT=50
+XBTEUR_HODL_PCT=20
+ETHEUR_TARGET_PCT=30
+ETHEUR_HODL_PCT=15
+
+# Trading Parameters (example)
+XBTEUR_K_ACT=2.0
+XBTEUR_MIN_MARGIN=0.006
+XBTEUR_STOP_PCT_LL=0.90
+XBTEUR_STOP_PCT_LV=0.90
+XBTEUR_STOP_PCT_MV=0.90
+XBTEUR_STOP_PCT_HV=0.90
+XBTEUR_STOP_PCT_HH=0.90
 ```
 
 2. **Initialize Data**:
