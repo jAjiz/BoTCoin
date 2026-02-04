@@ -248,7 +248,7 @@ The bot provides real-time interaction through Telegram commands:
 
 **Example**: Telegram interface in action
 
-![Telegram Bot Commands](https://github.com/user-attachments/assets/cea99967-4257-42c4-a729-b6576e5c8225)
+<img src="https://github.com/user-attachments/assets/cea99967-4257-42c4-a729-b6576e5c8225" alt="Telegram Bot Commands" width="400"/>
 
 ### Automated Alerts
 
