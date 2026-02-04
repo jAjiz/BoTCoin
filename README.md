@@ -1,8 +1,6 @@
 # BoTCoin - Autonomous Digital Asset Manager
 
-> **Autonomous Trading System with Real-Time Market Analysis and Adaptive Volatility Management**
-
-BoTCoin is a sophisticated, 24/7 autonomous digital asset management system that analyzes market conditions in real-time and dynamically adapts trading behavior based on measured volatility. The system integrates with Kraken exchange and provides real-time monitoring and alerts through Telegram.
+BoTCoin is a 24/7 autonomous digital asset management system that analyzes market conditions in real-time and dynamically adapts trading behavior based on measured volatility. The system integrates with Kraken exchange and provides real-time monitoring and alerts through Telegram.
 
 ## 🎯 System Overview
 
@@ -16,13 +14,13 @@ BoTCoin operates as an autonomous trading agent that:
 
 ### Key Features
 
-- 🔄 **24/7 Autonomous Operation** on Google Cloud Platform (Free Tier VPS)
 - 📊 **Real-Time Market Analysis** using Pandas DataFrames and Numpy vectorized calculations
 - 🎚️ **5-Level Volatility Classification** (LL, LV, MV, HV, HH) based on ATR percentiles
 - 📱 **Telegram Bot Interface** for monitoring and control
 - 🔐 **Secure Configuration** via environment variables
 - 🚀 **Automated CI/CD** deployment through GitHub Actions
 - 💾 **Data Persistence** with CSV-based data sinks for audit and analysis
+- 🔄 **24/7 Autonomous Operation** on Google Cloud Platform (Free Tier VPS)
 
 ## 🏗️ Architecture & Trading Engine
 
@@ -39,7 +37,7 @@ The system implements a **balance-majority decision logic**:
 2. **Position Management** (`update_trailing_state`):
    - **Pre-Activation Phase**: Monitors activation price and recalibrates if ATR changes significantly
    - **Post-Activation Phase**: Implements trailing stop mechanism
-   - **Dynamic Recalibration**: Adjusts stop distances when ATR deviates beyond ±20% (`ATR_DESV_LIMIT`)
+   - **Dynamic Recalibration**: Adjusts stop distances when ATR deviates beyond `ATR_DESV_LIMIT`
 
 3. **Position Closure** (`close_position`):
    - Executes limit orders when stop price is hit
@@ -160,6 +158,17 @@ The `analyze_structural_noise` function identifies market pivot points and calcu
 - **K-Value Calculation**: For each volatility segment, computes `K = max_deviation / ATR`
 - **Statistical Distribution**: Provides percentile-based K_STOP recommendations (P50, P75, P90, P95, P100)
 
+### Dynamic K_STOP Calculation
+
+The system uses `calculate_trading_parameters` and `calculate_k_stops` from `parameters_manager.py` to dynamically compute stop distances:
+
+1. **Event Analysis**: `analyze_structural_noise` returns uptrend and downtrend events with K-values per volatility level
+2. **Percentile Selection**: For each volatility level (LL, LV, MV, HV, HH), `calculate_k_stops` selects the K-value at the configured percentile (from `.env` STOP_PCT variables)
+3. **Stop Assignment**: 
+   - SELL positions use K_STOP from uptrend events (drawdown resistance)
+   - BUY positions use K_STOP from downtrend events (bounce resistance)
+4. **Runtime Application**: `get_k_stop` retrieves the appropriate K_STOP value based on current volatility level and position side
+
 ## 💾 Persistence & Data Structure
 
 ### State Management
@@ -248,7 +257,7 @@ The bot provides real-time interaction through Telegram commands:
 
 **Example**: Telegram interface in action
 
-<img src="https://github.com/user-attachments/assets/cea99967-4257-42c4-a729-b6576e5c8225" alt="Telegram Bot Commands" width="400"/>
+<img src="https://github.com/user-attachments/assets/cea99967-4257-42c4-a729-b6576e5c8225" alt="Telegram Bot Commands" width="300"/> <img src="https://github.com/user-attachments/assets/c954e1b5-0cac-469d-82dc-61d37a7bba4c" alt="Telegram Market Status" width="300"/>
 
 ### Automated Alerts
 
@@ -284,9 +293,12 @@ python trading/backtest.py PAIR=XBTEUR FEE_PCT=0.26 START=2025-01-01 END=2026-01
 
 **Key Features** (`trading/optimize_params.py`):
 - Exhaustive parameter combinations testing
-- Multiple optimization modes: CONSERVATIVE, AGGRESSIVE, CURRENT
+- Multiple optimization modes:
+  - **CONSERVATIVE**: Tests MIN_MARGIN configurations (entry price protection)
+  - **AGGRESSIVE**: Tests K_ACT configurations (ATR-based activation)
+  - **CURRENT**: Validates existing `.env` configuration
 - Train/test split for validation
-- Ranking methods: ROBUST (median + IQR) or MEAN (average)
+- Ranking method: ROBUST (median + IQR for outlier resistance)
 - Configurable search space for K_ACT, K_STOP percentiles, and MIN_MARGIN
 
 **Usage**:
@@ -302,64 +314,62 @@ The **Backtest and Optimizer modules** have been developed with intensive AI ass
 
 ### Environment Variables
 
-**Credentials**:
+Create a `.env` file with the following configuration:
+
 ```bash
-KRAKEN_API_KEY=your_api_key
-KRAKEN_API_SECRET=your_api_secret
-TELEGRAM_TOKEN=your_bot_token
-TELEGRAM_USER_ID=your_telegram_id
+# Kraken API Credentials
+KRAKEN_API_KEY=                    # Your Kraken API key
+KRAKEN_API_SECRET=                 # Your Kraken API secret
+
+# Telegram Bot Credentials (obtain from @BotFather)
+TELEGRAM_TOKEN=                    # Bot token from @BotFather
+TELEGRAM_USER_ID=                  # Your numeric Telegram user ID
+TELEGRAM_POLL_INTERVAL=10          # Polling interval in seconds (default: 0)
+
+# Bot Settings
+SLEEPING_INTERVAL=60               # Seconds between trading sessions (default: 60)
+PARAM_SESSIONS=720                 # Sessions before recalculating parameters (default: 720, ~12h)
+CANDLE_TIMEFRAME=15                # Candle size in minutes (default: 15)
+MARKET_DATA_DAYS=60                # Days of historical data to store (default: 60)
+ATR_PERIOD=14                      # ATR calculation period in candles (default: 14)
+ATR_DESV_LIMIT=0.2                 # ATR deviation threshold for recalibration (default: 0.2, 20%)
+MIN_VALUE=10                       # Minimum operation value in EUR (default: 10)
+MINIMUM_CHANGE_PCT=0.02            # Minimum price change for pivot detection (default: 0.02, 2%)
+
+# Pairs
+PAIRS=XBTEUR,ETHEUR                # Comma-separated list of trading pairs
+
+# Asset Allocation (per pair)
+XBTEUR_TARGET_PCT=80               # Target portfolio percentage for XBTEUR
+XBTEUR_HODL_PCT=20                 # Minimum hold percentage (don't sell below this)
+
+ETHEUR_TARGET_PCT=20               # Target portfolio percentage for ETHEUR
+ETHEUR_HODL_PCT=0                  # Minimum hold percentage for ETHEUR
+
+# Trading Parameters (per pair)
+# XBTEUR uses MIN_MARGIN strategy (no K_ACT defined)
+XBTEUR_MIN_MARGIN=0.009            # Minimum profit margin for activation (0.9%)
+XBTEUR_STOP_PCT_LL=0.95            # Stop percentile for Very Low volatility (95th)
+XBTEUR_STOP_PCT_LV=0.90            # Stop percentile for Low volatility (90th)
+XBTEUR_STOP_PCT_MV=0.65            # Stop percentile for Medium volatility (65th)
+XBTEUR_STOP_PCT_HV=0.50            # Stop percentile for High volatility (50th)
+XBTEUR_STOP_PCT_HH=0.50            # Stop percentile for Very High volatility (50th)
+
+# ETHEUR uses K_ACT strategy (ATR-based activation)
+ETHEUR_K_ACT=1.5                   # Activation coefficient (multiplies ATR)
+ETHEUR_STOP_PCT_LL=0.90            # Stop percentile for Very Low volatility (90th)
+ETHEUR_STOP_PCT_LV=0.25            # Stop percentile for Low volatility (25th)
+ETHEUR_STOP_PCT_MV=0.99            # Stop percentile for Medium volatility (99th)
+ETHEUR_STOP_PCT_HV=0.99            # Stop percentile for High volatility (99th)
+ETHEUR_STOP_PCT_HH=0.90            # Stop percentile for Very High volatility (90th)
 ```
 
-**System Settings**:
-```bash
-SLEEPING_INTERVAL=60           # Seconds between sessions
-PARAM_SESSIONS=720             # Recalculate parameters every N sessions (12h)
-CANDLE_TIMEFRAME=15            # Candle size in minutes
-MARKET_DATA_DAYS=60            # Historical data window
-ATR_PERIOD=14                  # ATR calculation period
-ATR_DESV_LIMIT=0.2            # Recalibration threshold (20%)
-MIN_VALUE=10                   # Minimum operation value (EUR)
-TELEGRAM_POLL_INTERVAL=0       # Telegram polling interval in seconds (0 = default)
-MINIMUM_CHANGE_PCT=0.02        # Minimum price change for pivot detection (2%)
-```
-
-**Trading Pairs**:
-```bash
-PAIRS=XBTEUR,ETHEUR            # Comma-separated list
-```
-
-**Asset Allocation** (per pair):
-```bash
-XBTEUR_TARGET_PCT=50           # Target portfolio percentage
-XBTEUR_HODL_PCT=20             # Minimum hold percentage (don't sell below)
-```
-
-**Trading Parameters** (per pair and side):
-
-Configuration can be done in two ways:
-
-1. **Common for both sides** (simpler):
-```bash
-XBTEUR_K_ACT=2.0               # Activation coefficient for both BUY and SELL
-XBTEUR_MIN_MARGIN=0.006        # Minimum margin for both BUY and SELL (0.6%)
-```
-
-2. **Independent per side** (more control):
-```bash
-XBTEUR_SELL_K_ACT=2.0          # Sell activation coefficient (multiplies ATR)
-XBTEUR_SELL_MIN_MARGIN=0.006   # Minimum profit margin for SELL (0.6%)
-XBTEUR_BUY_K_ACT=1.5           # Buy activation coefficient
-XBTEUR_BUY_MIN_MARGIN=0.003    # Minimum profit margin for BUY (0.3%)
-```
-
-**Stop Loss Configuration** (per volatility level):
-```bash
-XBTEUR_STOP_PCT_LL=0.90        # 90th percentile for Very Low Volatility
-XBTEUR_STOP_PCT_LV=0.90        # 90th percentile for Low Volatility
-XBTEUR_STOP_PCT_MV=0.90        # 90th percentile for Medium Volatility
-XBTEUR_STOP_PCT_HV=0.90        # 90th percentile for High Volatility
-XBTEUR_STOP_PCT_HH=0.90        # 90th percentile for Very High Volatility
-```
+**Configuration Flexibility**:
+- **K_ACT and MIN_MARGIN** can be configured per side (SELL/BUY) or common for both:
+  - Common: `PAIR_K_ACT`, `PAIR_MIN_MARGIN`
+  - Per side: `PAIR_SELL_K_ACT`, `PAIR_BUY_K_ACT`, `PAIR_SELL_MIN_MARGIN`, `PAIR_BUY_MIN_MARGIN`
+- If **K_ACT** is defined, activation uses: `activation_distance = K_ACT * ATR`
+- If **K_ACT** is not defined, activation uses: `activation_distance = K_STOP * ATR + MIN_MARGIN * entry_price`
 
 ### Infrastructure
 
@@ -470,53 +480,9 @@ pip install -r requirements.txt
 
 1. **Configure Environment**:
    
-   Create a `.env` file in the project root with the following variables:
-   
-```bash
-# Kraken API Credentials
-KRAKEN_API_KEY=your_api_key
-KRAKEN_API_SECRET=your_api_secret
+   Create a `.env` file in the project root with the configuration variables shown in the [Environment Variables](#environment-variables) section above.
 
-# Telegram Bot Credentials (obtain from @BotFather)
-TELEGRAM_TOKEN=your_bot_token              # Bot token from @BotFather
-TELEGRAM_USER_ID=your_telegram_id          # Your numeric Telegram user ID
-
-# System Settings
-SLEEPING_INTERVAL=60
-PARAM_SESSIONS=720
-CANDLE_TIMEFRAME=15
-MARKET_DATA_DAYS=60
-ATR_PERIOD=14
-ATR_DESV_LIMIT=0.2
-MIN_VALUE=10
-TELEGRAM_POLL_INTERVAL=0                   # 0 = default polling, >0 = custom interval in seconds
-MINIMUM_CHANGE_PCT=0.02                    # Minimum 2% price change for pivot detection
-
-# Trading Pairs
-PAIRS=XBTEUR,ETHEUR
-
-# Asset Allocation (per pair)
-XBTEUR_TARGET_PCT=50
-XBTEUR_HODL_PCT=20
-ETHEUR_TARGET_PCT=30
-ETHEUR_HODL_PCT=15
-
-# Trading Parameters (example)
-XBTEUR_K_ACT=2.0
-XBTEUR_MIN_MARGIN=0.006
-XBTEUR_STOP_PCT_LL=0.90
-XBTEUR_STOP_PCT_LV=0.90
-XBTEUR_STOP_PCT_MV=0.90
-XBTEUR_STOP_PCT_HV=0.90
-XBTEUR_STOP_PCT_HH=0.90
-```
-
-2. **Initialize Data**:
-```bash
-python -c "from core.state import *; import os; os.makedirs('data', exist_ok=True)"
-```
-
-3. **Run Bot**:
+2. **Run Bot**:
 ```bash
 python main.py
 ```
@@ -528,14 +494,14 @@ python main.py
 python trading/market_analyzer.py PAIR=XBTEUR Volatility=ALL SHOW_EVENTS
 ```
 
-**Parameter Optimization**:
-```bash
-python trading/optimize_params.py PAIR=XBTEUR MODE=CONSERVATIVE FEE_PCT=0.26
-```
-
 **Backtest Strategy**:
 ```bash
 python trading/backtest.py PAIR=XBTEUR FEE_PCT=0.26
+```
+
+**Parameter Optimization**:
+```bash
+python trading/optimize_params.py PAIR=XBTEUR MODE=CONSERVATIVE FEE_PCT=0.26
 ```
 
 ## 📈 Project Structure
