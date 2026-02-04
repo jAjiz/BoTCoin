@@ -1,14 +1,5 @@
 # BoTCoin - Autonomous Digital Asset Manager
 
-<div align="center">
-
-![Python](https://img.shields.io/badge/python-3.x-blue.svg)
-![License](https://img.shields.io/badge/license-Educational-green.svg)
-![Status](https://img.shields.io/badge/status-Active-success.svg)
-![Platform](https://img.shields.io/badge/platform-GCP-blue.svg)
-
-</div>
-
 BoTCoin is a 24/7 autonomous digital asset management system that analyzes market conditions in real-time and dynamically adapts trading behavior based on measured volatility. The system integrates with Kraken exchange and provides real-time monitoring and alerts through Telegram.
 
 ---
@@ -28,7 +19,6 @@ BoTCoin is a 24/7 autonomous digital asset management system that analyzes marke
 - [Security Considerations](#-security-considerations)
 - [Performance Metrics](#-performance-metrics)
 - [Technical Highlights](#-technical-highlights)
-- [Roadmap](#-roadmap)
 - [Contributing](#-contributing)
 - [License & Disclaimer](#-license--disclaimer)
 
@@ -42,7 +32,7 @@ BoTCoin operates as an autonomous trading agent that:
 - **Adaptive Behavior**: Dynamically adjusts trading parameters based on current volatility levels
 - **Balance-Based Decision Logic**: Prioritizes operations based on portfolio composition (asset vs. cash predominance)
 - **Risk Management**: Implements trailing stop mechanisms with volatility-adjusted distances
-- **Real-Time Monitoring**: Telegram integration for commands, alerts, and position tracking
+- **Real-Time Monitoring**: commands, alerts, and position tracking
 
 ### ✨ Key Features
 
@@ -268,7 +258,7 @@ The bot provides real-time interaction through Telegram commands:
 
 **Example**: Telegram interface in action
 
-<img src="https://github.com/user-attachments/assets/cea99967-4257-42c4-a729-b6576e5c8225" alt="Telegram Bot Commands" width="300"/> <img src="https://github.com/user-attachments/assets/c954e1b5-0cac-469d-82dc-61d37a7bba4c" alt="Telegram Market Status" width="300"/>
+<img src="https://github.com/user-attachments/assets/64f97b75-9b60-4d7a-a5e4-2bbadcc51913" alt="Telegram Bot Commands" width="300"/> <img src="https://github.com/user-attachments/assets/3c356282-d760-4dfa-b5c2-c8d6475b387c" alt="Telegram Market Status" width="300"/>
 
 ### Automated Alerts
 
@@ -597,54 +587,11 @@ All data persists in CSV format for:
 - **Trailing Stop**: Price-following mechanism with volatility adaptation
 - **Balance-Majority Logic**: Portfolio-driven decision making
 
-## 🗺️ Roadmap
-
-### Current Features
-- ✅ Multi-pair trading support (EUR-based)
-- ✅ Volatility-adaptive trading strategy
-- ✅ Telegram bot interface
-- ✅ Automated CI/CD deployment
-- ✅ Backtesting and optimization tools
-- ✅ Real-time market analysis with ATR
-
-### Future Enhancements
-- 🔮 Support for additional exchanges (Binance, Coinbase)
-- 🔮 Multi-currency support (USD, GBP, etc.)
-- 🔮 Web dashboard for monitoring
-- 🔮 Machine learning-based parameter optimization
-- 🔮 Advanced risk management features
-- 🔮 Portfolio rebalancing automation
-- 🔮 Integration with DeFi protocols
-- 🔮 Mobile app for iOS/Android
-
 ## 🤝 Contributing
 
 Contributions are welcome! This project is primarily for educational purposes, but improvements and suggestions are appreciated.
 
-### How to Contribute
-
-1. **Fork the repository**
-2. **Create a feature branch** (`git checkout -b feature/amazing-feature`)
-3. **Commit your changes** (`git commit -m 'Add some amazing feature'`)
-4. **Push to the branch** (`git push origin feature/amazing-feature`)
-5. **Open a Pull Request**
-
-### Development Guidelines
-
-- Follow existing code style and patterns
-- Add tests for new features when applicable
-- Update documentation for significant changes
-- Keep commits focused and well-described
-- Test with paper trading before live deployment
-
-### Reporting Issues
-
-If you encounter bugs or have feature requests:
-
-1. Check existing issues to avoid duplicates
-2. Provide detailed description with steps to reproduce
-3. Include relevant logs and configuration (sanitize sensitive data)
-4. Specify your environment (Python version, OS, etc.)
+Bug reports are also appreciated.
 
 ## 📞 Contact & Support
 
@@ -664,12 +611,4 @@ This project is for educational and portfolio demonstration purposes.
 
 ---
 
-<div align="center">
-
 **Built with data-driven decision making and continuous operation in mind.**
-
-<!-- Social badges - These point to the original repository -->
-[![GitHub Stars](https://img.shields.io/github/stars/jAjiz/BoTCoin?style=social)](https://github.com/jAjiz/BoTCoin/stargazers)
-[![GitHub Forks](https://img.shields.io/github/forks/jAjiz/BoTCoin?style=social)](https://github.com/jAjiz/BoTCoin/network/members)
-
-</div>
