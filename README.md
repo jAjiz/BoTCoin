@@ -124,7 +124,6 @@ The system classifies market conditions into **5 volatility levels** based on AT
 | **LV** | P20-P50 | Low Volatility |
 | **MV** | P50-P80 | Medium Volatility |
 | **HV** | P80-P95 | High Volatility |
-| **HV** | P80-P95 | High Volatility |
 | **HH** | > P95 | Very High Volatility |
 
 The system determines the current volatility level for each pair by comparing the calculated ATR against these percentile thresholds.
