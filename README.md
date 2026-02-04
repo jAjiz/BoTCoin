@@ -2,6 +2,28 @@
 
 BoTCoin is a 24/7 autonomous digital asset management system that analyzes market conditions in real-time and dynamically adapts trading behavior based on measured volatility. The system integrates with Kraken exchange and provides real-time monitoring and alerts through Telegram.
 
+---
+
+## 📑 Table of Contents
+
+- [System Overview](#-system-overview)
+- [Architecture & Trading Engine](#-architecture--trading-engine)
+- [Data Analysis & Volatility Regimes](#-data-analysis--volatility-regimes)
+- [Persistence & Data Structure](#-persistence--data-structure)
+- [Exchange Integration](#-exchange-integration)
+- [Telegram Integration](#-telegram-integration)
+- [Simulation & Optimization](#-simulation--optimization)
+- [Configuration & Deployment](#-configuration--deployment)
+- [Quick Start](#-quick-start)
+- [Project Structure](#-project-structure)
+- [Security Considerations](#-security-considerations)
+- [Performance Metrics](#-performance-metrics)
+- [Technical Highlights](#-technical-highlights)
+- [Contributing](#-contributing)
+- [License & Disclaimer](#-license--disclaimer)
+
+---
+
 ## 🎯 System Overview
 
 BoTCoin operates as an autonomous trading agent that:
@@ -10,9 +32,9 @@ BoTCoin operates as an autonomous trading agent that:
 - **Adaptive Behavior**: Dynamically adjusts trading parameters based on current volatility levels
 - **Balance-Based Decision Logic**: Prioritizes operations based on portfolio composition (asset vs. cash predominance)
 - **Risk Management**: Implements trailing stop mechanisms with volatility-adjusted distances
-- **Real-Time Monitoring**: Telegram integration for commands, alerts, and position tracking
+- **Real-Time Monitoring**: commands, alerts, and position tracking
 
-### Key Features
+### ✨ Key Features
 
 - 📊 **Real-Time Market Analysis** using Pandas DataFrames and Numpy vectorized calculations
 - 🎚️ **5-Level Volatility Classification** (LL, LV, MV, HV, HH) based on ATR percentiles
@@ -35,6 +57,27 @@ The system implements a **balance-majority decision logic**:
    - Calculates activation price based on:
      - Activation coefficient (`K_ACT`)
      - Stop coefficient + margin (`K_STOP + MIN_MARGIN`)
+
+### Decision Logic Diagram
+
+```mermaid
+graph LR
+    A[Portfolio Analysis] --> B{Balance Comparison}
+    B -->|Asset Value > Cash| C[SELL Position Priority]
+    B -->|Cash > Asset Value| D[BUY Position Priority]
+    
+    C --> E[Calculate Sell Value<br/>current_value - hodl_value]
+    D --> F[Calculate Buy Value<br/>target_value - current_value<br/>limited by available_fiat]
+    
+    E --> G[Create SELL Position]
+    F --> H[Create BUY Position]
+    
+    G --> I[Activation: entry + activation_distance]
+    H --> J[Activation: entry - activation_distance]
+    
+    I --> K[Trailing Stop: activation - K_STOP * ATR]
+    J --> L[Trailing Stop: activation + K_STOP * ATR]
+```
 
 2. **Position Management** (`update_trailing_state`):
    - **Pre-Activation Phase**: Monitors activation price and recalibrates if ATR changes significantly
@@ -80,27 +123,6 @@ graph TD
     
     Q --> R[Sleep SLEEPING_INTERVAL]
     R --> A
-```
-
-### Decision Logic Diagram
-
-```mermaid
-graph LR
-    A[Portfolio Analysis] --> B{Balance Comparison}
-    B -->|Asset Value > Cash| C[SELL Position Priority]
-    B -->|Cash > Asset Value| D[BUY Position Priority]
-    
-    C --> E[Calculate Sell Value<br/>current_value - hodl_value]
-    D --> F[Calculate Buy Value<br/>target_value - current_value<br/>limited by available_fiat]
-    
-    E --> G[Create SELL Position]
-    F --> H[Create BUY Position]
-    
-    G --> I[Activation: entry + activation_distance]
-    H --> J[Activation: entry - activation_distance]
-    
-    I --> K[Trailing Stop: activation - K_STOP * ATR]
-    J --> L[Trailing Stop: activation + K_STOP * ATR]
 ```
 
 ## 📊 Data Analysis & Volatility Regimes
@@ -236,7 +258,7 @@ The bot provides real-time interaction through Telegram commands:
 
 **Example**: Telegram interface in action
 
-<img src="https://github.com/user-attachments/assets/cea99967-4257-42c4-a729-b6576e5c8225" alt="Telegram Bot Commands" width="300"/> <img src="https://github.com/user-attachments/assets/c954e1b5-0cac-469d-82dc-61d37a7bba4c" alt="Telegram Market Status" width="300"/>
+<img src="https://github.com/user-attachments/assets/64f97b75-9b60-4d7a-a5e4-2bbadcc51913" alt="Telegram Bot Commands" width="300"/> <img src="https://github.com/user-attachments/assets/3c356282-d760-4dfa-b5c2-c8d6475b387c" alt="Telegram Market Status" width="300"/>
 
 ### Automated Alerts
 
@@ -565,17 +587,26 @@ All data persists in CSV format for:
 - **Trailing Stop**: Price-following mechanism with volatility adaptation
 - **Balance-Majority Logic**: Portfolio-driven decision making
 
+## 🤝 Contributing
+
+Contributions are welcome! This project is primarily for educational purposes, but improvements and suggestions are appreciated.
+
+Bug reports are also appreciated.
+
+**Contact**: For questions, suggestions, or collaboration opportunities, feel free to open an issue or reach out through GitHub.
+
+- **Author**: [jAjiz](https://github.com/jAjiz)
+- **Repository**: [BoTCoin](https://github.com/jAjiz/BoTCoin)
+- **Issues**: [GitHub Issues](https://github.com/jAjiz/BoTCoin/issues)
+
 ## 📝 License & Disclaimer
 
 This project is for educational and portfolio demonstration purposes. 
 
 **⚠️ Trading Disclaimer**: Cryptocurrency trading involves substantial risk. This bot operates with real funds and can result in financial loss. Use at your own risk. Past performance does not guarantee future results.
 
----
-
-**Author**: [jAjiz](https://github.com/jAjiz)  
-**Repository**: [BoTCoin](https://github.com/jAjiz/BoTCoin)
+**⚠️ No Financial Advice**: This software is not financial advice. The author is not responsible for any financial losses incurred through the use of this software. Always do your own research and invest responsibly.
 
 ---
 
-*Built with data-driven decision making and continuous operation in mind.*
+**Built with data-driven decision making and continuous operation in mind.**
