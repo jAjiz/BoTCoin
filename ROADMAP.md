@@ -1,6 +1,6 @@
 # BoTCoin V2 – Roadmap
 
-This document outlines the improvement areas and phased plan for the next iteration of BoTCoin, with a focus on **Senior Data Engineering and Cloud Architecture** principles. The goal is to evolve the project into a managed data pipeline with professional-grade persistence, observability, and testability.
+This document outlines the improvement areas and phased plan for the next iteration of BoTCoin, with a focus on **Data Engineering and Cloud Architecture** principles. The goal is to evolve the project into a managed data pipeline with professional-grade persistence, observability, and testability.
 
 ---
 
@@ -16,6 +16,7 @@ This document outlines the improvement areas and phased plan for the next iterat
   - [Phase 5 – Code Quality: Linting & Type Safety](#phase-5--code-quality-linting--type-safety)
   - [Phase 6 – CI/CD Pipeline](#phase-6--cicd-pipeline)
   - [Phase 7 – Data Architecture Documentation](#phase-7--data-architecture-documentation)
+  - [Phase 8 – Observability: Grafana Dashboard](#phase-8--observability-grafana-dashboard)
 - [Out of Scope](#-out-of-scope)
 
 ---
@@ -66,6 +67,9 @@ The current pipeline deploys on every push to `main` with no validation. Tests m
 ### 7. Data Architecture Documentation
 With a two-tier persistence layer in place, the data model must be documented explicitly. The PostgreSQL schema (ERD) and the Redis key-value structure should be added to `README.md` as the authoritative reference for understanding how the bot stores and accesses data.
 
+### 8. Observability: Grafana Dashboard
+With structured data in PostgreSQL, a Grafana service can expose market metrics, trading performance, and system health as persistent, queryable dashboards. Running Grafana as a Docker Compose service keeps the observability layer co-located with the rest of the stack and reproducible with a single `docker compose up`.
+
 ---
 
 ## 🚀 Phased Roadmap
@@ -104,12 +108,8 @@ Phases are ordered by dependency — each phase is a prerequisite for the next. 
 - [ ] Add `prefect` as a runtime dependency
 - [ ] Refactor `main.py` to use Prefect decorators:
   - Annotate the top-level trading session as a `@flow` (`botcoin_session_flow`)
-  - Annotate each logical step as a `@task`:
-    - `fetch_balance` – wraps `get_balance()` with Prefect retry policy
-    - `fetch_prices` – wraps `get_last_prices()` with Prefect retry policy
-    - `process_pair` – encapsulates the per-pair analysis, position creation, and trailing stop update logic
-    - `persist_state` – wraps `save_trailing_state()` and runtime state updates
-  - Configure `retry_delay_seconds` and `max_retries` on Kraken API tasks to replace manual error-and-sleep logic
+  - Annotate each logical step as a `@task`
+  - Configure retries on Kraken API tasks to replace manual error-and-sleep logic
 - [ ] Route all task logs through Prefect's logging layer so execution history is visible in the Prefect UI
 - [ ] Implement graceful shutdown:
   - Register signal handlers (`SIGTERM`, `SIGINT`) that set a shutdown flag
@@ -136,8 +136,6 @@ Phases are ordered by dependency — each phase is a prerequisite for the next. 
   │   └── conftest.py
   └── integration/
       ├── test_kraken.py  # API connectivity (requires live credentials, opt-in)
-      ├── test_postgres.py # Schema creation, read/write round-trips
-      ├── test_redis.py    # Active state set/get operations
       └── conftest.py
   ```
 - [ ] **Unit tests** – cover pure-logic functions with no external dependencies:
@@ -148,15 +146,12 @@ Phases are ordered by dependency — each phase is a prerequisite for the next. 
   - `core/validation.py`: all configuration edge cases
   - `core/utils.py`: utility functions
   - Use `unittest.mock` to stub all exchange API calls and database clients
-- [ ] **Integration tests** – verify connectivity and persistence contracts:
+- [ ] **Integration tests** – verify API connectivity:
   - Kraken API: authenticated balance fetch, OHLC retrieval (skipped if credentials absent)
-  - PostgreSQL: schema migration applies cleanly; OHLC rows and closed positions round-trip correctly
-  - Redis: active trailing stop state is written and read back correctly
-  - Integration tests use the Docker Compose service network (`postgres`, `redis`) and require the stack to be running
 - [ ] Add a `pytest.ini` or `pyproject.toml` section for test discovery, coverage thresholds, and markers (`unit`, `integration`)
 - [ ] Add a `docker-compose.test.yml` override (or a dedicated `test` service) for running the full suite in CI
 
-**Success criteria:** `docker compose run test pytest tests/unit` passes with no external network calls. `docker compose run test pytest tests/integration` passes with the full stack running.
+**Success criteria:** `docker compose run test pytest tests/unit` passes with no external network calls. `docker compose run test pytest tests/integration` passes with valid Kraken credentials.
 
 ---
 
@@ -167,9 +162,7 @@ Phases are ordered by dependency — each phase is a prerequisite for the next. 
 **Scope:**
 
 #### PostgreSQL (historical data & closed positions)
-- [ ] Define the database schema:
-  - `ohlc_data` table: `(pair, timestamp, open, high, low, close, volume, atr)` — replaces CSV files in `data/`
-  - `closed_positions` table: `(id, pair, side, entry_price, close_price, quantity, pnl, open_time, close_time, metadata jsonb)` — replaces `data/closed_positions.json`
+- [ ] Define the `ohlc_data` and `closed_positions` table schemas
 - [ ] Write an Alembic migration (`scripts/migrations/`) to create both tables with appropriate indexes
 - [ ] Update `trading/market_analyzer.py` to read and write OHLC data from/to PostgreSQL instead of CSV files
 - [ ] Update `core/state.py`'s `save_closed_position` to write to the `closed_positions` table
@@ -249,12 +242,34 @@ Phases are ordered by dependency — each phase is a prerequisite for the next. 
 
 ---
 
+### Phase 8 – Observability: Grafana Dashboard
+
+**Goal:** Integrate Grafana as a persistent observability layer, connected directly to PostgreSQL, so that market, performance, and system metrics are always visible and the environment is fully reproducible.
+
+**Scope:**
+
+- [ ] Add a `grafana` service to `docker-compose.yml`:
+  - Use the official `grafana/grafana` image
+  - Configure a named volume for dashboard and datasource persistence so state survives container restarts
+  - Expose the Grafana UI on a local port (e.g., `3000`)
+- [ ] Provision a native PostgreSQL datasource automatically on startup (using Grafana's datasource provisioning directory)
+- [ ] Create a comprehensive dashboard covering:
+  - **Market metrics**: OHLC price history and ATR per pair
+  - **Performance metrics**: closed position PnL over time, win/loss ratio, cumulative return
+  - **System metrics**: session execution history (from Prefect), bot uptime, error rate
+- [ ] Persist the dashboard JSON definition in the repository (`grafana/dashboards/`) so it is provisioned automatically on `docker compose up`
+- [ ] Document the Grafana setup in `README.md` (port, default credentials, how to access)
+
+**Success criteria:** `docker compose up` starts the bot, databases, and Grafana. The dashboard loads automatically with no manual configuration. Dashboard state persists across container restarts.
+
+---
+
 ## 🚫 Out of Scope
 
 The following are intentionally excluded from the V2 roadmap:
 
 - **Multi-exchange support** – Kraken-only scope is maintained for V2
-- **Web dashboard** – Telegram interface and the Prefect UI remain the primary monitoring surfaces
+- **Trading/management web UI** – Telegram interface remains the primary control surface; Grafana covers observability
 - **Managed cloud databases** – PostgreSQL and Redis run as Docker Compose services; no RDS, ElastiCache, or equivalent managed services
 - **Cloud infrastructure changes** – GCP free-tier VPS deployment model is retained; no Kubernetes or container orchestration platforms
 - **Full async rewrite** – Prefect handles concurrency at the flow/task level; a deeper async rewrite of all modules is deferred
