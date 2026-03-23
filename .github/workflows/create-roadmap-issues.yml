@@ -1,6 +1,12 @@
 name: Create Roadmap Phase Issues
 
 on:
+  workflow_dispatch:
+    inputs:
+      milestone:
+        description: 'Milestone number to assign issues to'
+        required: false
+        default: '1'
   push:
     branches:
       - copilot/create-issues-for-roadmap-phases
@@ -24,11 +30,14 @@ jobs:
             const phases = JSON.parse(
               fs.readFileSync('.github/roadmap-issues.json', 'utf8')
             );
-            const milestoneNumber = 1;
+            const milestoneNumber = parseInt(
+              context.payload.inputs?.milestone ?? '1', 10
+            );
+            const MAX_PAGES = 20;
 
             const existing = [];
             let page = 1;
-            while (true) {
+            while (page <= MAX_PAGES) {
               const response = await github.rest.issues.listForRepo({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
