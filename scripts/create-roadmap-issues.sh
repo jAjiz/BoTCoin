@@ -8,23 +8,116 @@
 #
 # Usage:
 #   chmod +x scripts/create-roadmap-issues.sh
-#   ./scripts/create-roadmap-issues.sh
+#   ./scripts/create-roadmap-issues.sh [<owner/repo>]
+#
+# Environment variables:
+#   BOTCOIN_REPO  Override the target repository (e.g. BOTCOIN_REPO=myfork/BoTCoin)
 
 set -euo pipefail
 
-REPO="jAjiz/BoTCoin"
+DEFAULT_REPO="jAjiz/BoTCoin"
 MILESTONE="BoTCoin V2"
 
-echo "Creating BoTCoin V2 roadmap issues in milestone \"${MILESTONE}\"..."
+# ---------------------------------------------------------------------------
+# Determine target repository
+# Priority: CLI arg > BOTCOIN_REPO env var > gh detection > git remote > default
+# ---------------------------------------------------------------------------
+if [ "${1-}" != "" ]; then
+  REPO="$1"
+elif [ "${BOTCOIN_REPO-}" != "" ]; then
+  REPO="${BOTCOIN_REPO}"
+else
+  REPO=""
+  if command -v gh >/dev/null 2>&1; then
+    REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || true)"
+  fi
+
+  if [ -z "${REPO}" ] && command -v git >/dev/null 2>&1; then
+    origin_url="$(git config --get remote.origin.url 2>/dev/null || true)"
+    case "${origin_url}" in
+      git@github.com:*.git)
+        REPO="${origin_url#git@github.com:}"
+        REPO="${REPO%.git}"
+        ;;
+      https://github.com/*)
+        REPO="${origin_url#https://github.com/}"
+        REPO="${REPO%.git}"
+        ;;
+    esac
+  fi
+
+  if [ -z "${REPO}" ]; then
+    REPO="${DEFAULT_REPO}"
+  fi
+fi
+
+if [ "${REPO}" != "${DEFAULT_REPO}" ]; then
+  echo "Target repository detected as \"${REPO}\" (default is \"${DEFAULT_REPO}\")."
+  read -r -p "Proceed with creating issues in \"${REPO}\"? [y/N] " answer
+  case "${answer}" in
+    [yY][eE][sS]|[yY]) ;;
+    *)
+      echo "Aborting."
+      exit 1
+      ;;
+  esac
+fi
+
+# ---------------------------------------------------------------------------
+# Preflight checks
+# ---------------------------------------------------------------------------
+if ! command -v gh >/dev/null 2>&1; then
+  echo "Error: GitHub CLI (gh) is not installed or not in PATH." >&2
+  echo "Please install gh from https://cli.github.com/ and try again." >&2
+  exit 1
+fi
+
+if ! gh auth status >/dev/null 2>&1; then
+  echo "Error: GitHub CLI (gh) is not authenticated." >&2
+  echo "Run 'gh auth login' to authenticate before running this script." >&2
+  exit 1
+fi
+
+if ! gh issue list --repo "${REPO}" --milestone "${MILESTONE}" >/dev/null 2>&1; then
+  echo "Error: Milestone \"${MILESTONE}\" does not exist in repository \"${REPO}\"." >&2
+  echo "Please create this milestone in GitHub before running this script." >&2
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Helper: create an issue only if no open issue with the same title exists
+# ---------------------------------------------------------------------------
+create_issue() {
+  local title="$1"
+  local body="$2"
+
+  existing="$(gh issue list \
+    --repo "${REPO}" \
+    --milestone "${MILESTONE}" \
+    --search "\"${title}\" in:title" \
+    --json title \
+    --jq '.[].title' 2>/dev/null || true)"
+
+  if echo "${existing}" | grep -qF "${title}"; then
+    echo "⏭  Skipping \"${title}\" — issue already exists"
+    return
+  fi
+
+  gh issue create \
+    --repo "${REPO}" \
+    --milestone "${MILESTONE}" \
+    --title "${title}" \
+    --body "${body}"
+}
+
+echo "Creating BoTCoin V2 roadmap issues in \"${REPO}\" (milestone: \"${MILESTONE}\")..."
 
 # ---------------------------------------------------------------------------
 # Phase 1
 # ---------------------------------------------------------------------------
-gh issue create \
-  --repo "${REPO}" \
-  --milestone "${MILESTONE}" \
-  --title "Phase 1 – Infrastructure First: Docker" \
-  --body "## Goal
+create_issue \
+  "Phase 1 – Infrastructure First: Docker" \
+  "## Goal
 
 Establish a fully containerized development and production environment. All subsequent phases build on top of this foundation.
 
@@ -44,17 +137,14 @@ Establish a fully containerized development and production environment. All subs
 ## Success criteria
 
 \`docker compose up\` starts the bot with a valid \`.env\` file, matching current manual setup behavior. No Python environment setup is required on the host machine."
-
-echo "✓ Phase 1 issue created"
+echo "✓ Phase 1 done"
 
 # ---------------------------------------------------------------------------
 # Phase 2
 # ---------------------------------------------------------------------------
-gh issue create \
-  --repo "${REPO}" \
-  --milestone "${MILESTONE}" \
-  --title "Phase 2 – Managed Execution: Prefect Orchestration" \
-  --body "## Goal
+create_issue \
+  "Phase 2 – Managed Execution: Prefect Orchestration" \
+  "## Goal
 
 Replace the unmanaged \`while True\` loop in \`main.py\` with a Prefect-managed data pipeline, giving every session a structured lifecycle with native retries, observability, and graceful shutdown.
 
@@ -74,17 +164,14 @@ Replace the unmanaged \`while True\` loop in \`main.py\` with a Prefect-managed 
 ## Success criteria
 
 The bot runs as a Prefect flow. Individual task failures trigger automatic retries. A clean shutdown persists state and closes connections. Run history is accessible via the Prefect UI."
-
-echo "✓ Phase 2 issue created"
+echo "✓ Phase 2 done"
 
 # ---------------------------------------------------------------------------
 # Phase 3
 # ---------------------------------------------------------------------------
-gh issue create \
-  --repo "${REPO}" \
-  --milestone "${MILESTONE}" \
-  --title "Phase 3 – Testing Strategy" \
-  --body "## Goal
+create_issue \
+  "Phase 3 – Testing Strategy" \
+  "## Goal
 
 Implement a two-tier test suite (unit + integration) that runs entirely inside Docker, ensuring test parity with the production environment.
 
@@ -118,17 +205,14 @@ Implement a two-tier test suite (unit + integration) that runs entirely inside D
 ## Success criteria
 
 \`docker compose run test pytest tests/unit\` passes with no external network calls. \`docker compose run test pytest tests/integration\` passes with valid Kraken credentials."
-
-echo "✓ Phase 3 issue created"
+echo "✓ Phase 3 done"
 
 # ---------------------------------------------------------------------------
 # Phase 4
 # ---------------------------------------------------------------------------
-gh issue create \
-  --repo "${REPO}" \
-  --milestone "${MILESTONE}" \
-  --title "Phase 4 – Professional Persistence: PostgreSQL & Redis" \
-  --body "## Goal
+create_issue \
+  "Phase 4 – Professional Persistence: PostgreSQL & Redis" \
+  "## Goal
 
 Migrate all data storage from flat files to a two-tier database architecture. PostgreSQL handles structured historical data; Redis manages real-time active state.
 
@@ -157,17 +241,14 @@ Migrate all data storage from flat files to a two-tier database architecture. Po
 ## Success criteria
 
 The bot runs with no flat files. OHLC data is queryable from PostgreSQL. Active positions survive a bot restart via Redis. Existing data is migrated cleanly."
-
-echo "✓ Phase 4 issue created"
+echo "✓ Phase 4 done"
 
 # ---------------------------------------------------------------------------
 # Phase 5
 # ---------------------------------------------------------------------------
-gh issue create \
-  --repo "${REPO}" \
-  --milestone "${MILESTONE}" \
-  --title "Phase 5 – Code Quality: Linting & Type Safety" \
-  --body "## Goal
+create_issue \
+  "Phase 5 – Code Quality: Linting & Type Safety" \
+  "## Goal
 
 Enforce consistent formatting and type safety across the entire codebase.
 
@@ -186,17 +267,14 @@ Enforce consistent formatting and type safety across the entire codebase.
 ## Success criteria
 
 \`ruff check .\` and \`ruff format --check .\` pass cleanly. All public function signatures carry type annotations."
-
-echo "✓ Phase 5 issue created"
+echo "✓ Phase 5 done"
 
 # ---------------------------------------------------------------------------
 # Phase 6
 # ---------------------------------------------------------------------------
-gh issue create \
-  --repo "${REPO}" \
-  --milestone "${MILESTONE}" \
-  --title "Phase 6 – CI/CD Pipeline" \
-  --body "## Goal
+create_issue \
+  "Phase 6 – CI/CD Pipeline" \
+  "## Goal
 
 Add lint and test quality gates that run inside Docker before any deployment step is allowed.
 
@@ -215,17 +293,14 @@ Add lint and test quality gates that run inside Docker before any deployment ste
 ## Success criteria
 
 A PR with a failing test or lint error is blocked from merging. The deploy workflow only runs after all checks pass on \`main\`."
-
-echo "✓ Phase 6 issue created"
+echo "✓ Phase 6 done"
 
 # ---------------------------------------------------------------------------
 # Phase 7
 # ---------------------------------------------------------------------------
-gh issue create \
-  --repo "${REPO}" \
-  --milestone "${MILESTONE}" \
-  --title "Phase 7 – Data Architecture Documentation" \
-  --body "## Goal
+create_issue \
+  "Phase 7 – Data Architecture Documentation" \
+  "## Goal
 
 Document the V2 data architecture — the PostgreSQL schema and the Redis key-value structure — in \`README.md\` as the authoritative reference for understanding how the bot stores and accesses data.
 
@@ -241,17 +316,14 @@ Document the V2 data architecture — the PostgreSQL schema and the Redis key-va
 ## Success criteria
 
 A developer unfamiliar with the project can understand the full data model and how to query or inspect it using only the repository documentation."
-
-echo "✓ Phase 7 issue created"
+echo "✓ Phase 7 done"
 
 # ---------------------------------------------------------------------------
 # Phase 8
 # ---------------------------------------------------------------------------
-gh issue create \
-  --repo "${REPO}" \
-  --milestone "${MILESTONE}" \
-  --title "Phase 8 – Observability: Grafana Dashboard" \
-  --body "## Goal
+create_issue \
+  "Phase 8 – Observability: Grafana Dashboard" \
+  "## Goal
 
 Integrate Grafana as a persistent observability layer, connected directly to PostgreSQL, so that market, performance, and system metrics are always visible and the environment is fully reproducible.
 
@@ -272,8 +344,7 @@ Integrate Grafana as a persistent observability layer, connected directly to Pos
 ## Success criteria
 
 \`docker compose up\` starts the bot, databases, and Grafana. The dashboard loads automatically with no manual configuration. Dashboard state persists across container restarts."
-
-echo "✓ Phase 8 issue created"
+echo "✓ Phase 8 done"
 
 echo ""
-echo "All 8 roadmap issues created successfully."
+echo "All 8 roadmap issues processed successfully."
