@@ -1,5 +1,5 @@
 import sys
-import time
+import signal
 import core.logging as logging
 import core.runtime as runtime
 import services.telegram as telegram
@@ -21,6 +21,19 @@ from trading.positions_manager import (
 )
 
 _session_count = 0
+READ_ONLY_RETRY_ATTEMPTS = 3
+
+
+def call_with_retry(func, *args):
+    for _ in range(READ_ONLY_RETRY_ATTEMPTS):
+        try:
+            result = func(*args)
+            if result is not None:
+                return result
+        except Exception:
+            continue
+
+    return None
 
 
 def trading_session():
@@ -33,21 +46,21 @@ def trading_session():
     logging.info("======== STARTING SESSION ========")
     trailing_state = load_trailing_state()
 
-    current_balance = get_balance()
-    if not current_balance:
+    current_balance = call_with_retry(get_balance)
+    if current_balance is None:
         logging.error("Could not fetch balance. Skipping session.\n")
         return
     runtime.update_balance(current_balance)
 
-    last_prices = get_last_prices(PAIRS)
-    if not last_prices:
+    last_prices = call_with_retry(get_last_prices, PAIRS)
+    if last_prices is None:
         logging.error("Could not fetch prices. Skipping session.\n")
         return
 
     for pair in PAIRS.keys():
         logging.info(f"--- Processing pair: [{pair}] ---")
         current_price = last_prices.get(pair, None)
-        current_atr = get_current_atr(pair)
+        current_atr = call_with_retry(get_current_atr, pair)
 
         if _session_count % PARAM_SESSIONS == 0:
             calculate_trading_parameters(pair)
@@ -88,15 +101,25 @@ def main():
         next_run_time=__import__("datetime").datetime.now(),
     )
 
+    def _handle_shutdown(signum, _frame):
+        signal_name = signal.Signals(signum).name
+        logging.info(f"Received {signal_name}. Shutting down scheduler...")
+        try:
+            scheduler.shutdown(wait=True)
+        except Exception as e:
+            logging.error(f"Error while shutting down scheduler: {e}")
+
+    signal.signal(signal.SIGTERM, _handle_shutdown)
+    signal.signal(signal.SIGINT, _handle_shutdown)
+
     try:
         scheduler.start()
-    except (KeyboardInterrupt, SystemExit):
-        logging.info("BoTC stopped manually by user.\n", to_telegram=True)
     except Exception as e:
         logging.error(f"BoTC encountered an error: {e}\n", to_telegram=True)
     finally:
         if TELEGRAM_ENABLED:
             telegram.stop_telegram_thread()
+        logging.info("BoTC has stopped.", to_telegram=True)
 
 
 def check_closed_position(pair, trailing_state):
