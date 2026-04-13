@@ -1,0 +1,4 @@
+[run]
+omit =
+    trading/backtest.py
+    trading/optimize_params.py
