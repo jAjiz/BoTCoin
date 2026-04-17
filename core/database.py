@@ -1,0 +1,349 @@
+from contextlib import contextmanager
+from datetime import datetime, timezone
+from decimal import Decimal
+from typing import Optional, Dict, Any, Iterator
+
+import pandas as pd
+from sqlalchemy import (
+    create_engine,
+    Column,
+    Text,
+    Integer,
+    DateTime,
+    Numeric,
+    BigInteger,
+    Index,
+    CheckConstraint,
+    and_,
+    desc,
+)
+from sqlalchemy.orm import declarative_base, sessionmaker, Session
+from sqlalchemy.pool import QueuePool
+
+import core.logging as logging
+from core.config import (
+    POSTGRES_DB,
+    POSTGRES_USER,
+    POSTGRES_PASSWORD,
+    POSTGRES_HOST,
+    POSTGRES_PORT,
+)
+
+logger = logging.logging.getLogger(__name__)
+
+# ============================================================================
+# Database Setup
+# ============================================================================
+
+DATABASE_URL = (
+    f"postgresql+psycopg://{POSTGRES_USER}:{POSTGRES_PASSWORD}"
+    f"@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
+)
+
+# Create engine with connection pooling
+engine = create_engine(
+    DATABASE_URL,
+    poolclass=QueuePool,
+    pool_size=10,
+    max_overflow=20,
+    pool_pre_ping=True,  # Verify connections before using
+    pool_recycle=3600,   # Recycle connections after 1 hour
+    echo=False,  # Set to True for SQL debugging
+)
+
+# Session factory
+SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
+
+# ORM Base
+Base = declarative_base()
+
+
+# ============================================================================
+# ORM Models
+# ============================================================================
+
+
+class OHLCData(Base):
+    """OHLC market data for trading pairs."""
+
+    __tablename__ = "ohlc_data"
+
+    pair = Column(Text, primary_key=True, nullable=False)
+    timeframe_minutes = Column(Integer, primary_key=True, nullable=False)
+    dtime = Column(DateTime(timezone=True), primary_key=True, nullable=False)
+    source_exchange = Column(Text, nullable=False, default="kraken")
+    open = Column(Numeric(20, 10), nullable=False)
+    high = Column(Numeric(20, 10), nullable=False)
+    low = Column(Numeric(20, 10), nullable=False)
+    close = Column(Numeric(20, 10), nullable=False)
+    vwap = Column(Numeric(20, 10), nullable=True)
+    volume = Column(Numeric(28, 10), nullable=True)
+    count = Column(Integer, nullable=True)
+    atr = Column(Numeric(20, 10), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        CheckConstraint("timeframe_minutes > 0", name="ck_ohlc_data_timeframe_positive"),
+        CheckConstraint("count IS NULL OR count >= 0", name="ck_ohlc_data_count_nonnegative"),
+        CheckConstraint("high >= low", name="ck_ohlc_data_price_range_valid"),
+        CheckConstraint("open >= low AND open <= high", name="ck_ohlc_data_open_in_range"),
+        CheckConstraint("close >= low AND close <= high", name="ck_ohlc_data_close_in_range"),
+        Index("ix_ohlc_data_pair_timeframe_dtime_desc", pair, timeframe_minutes, desc(dtime)),
+    )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "pair": self.pair,
+            "timeframe_minutes": self.timeframe_minutes,
+            "dtime": self.dtime,
+            "source_exchange": self.source_exchange,
+            "open": float(self.open),
+            "high": float(self.high),
+            "low": float(self.low),
+            "close": float(self.close),
+            "vwap": float(self.vwap) if self.vwap else None,
+            "volume": float(self.volume) if self.volume else None,
+            "count": self.count,
+            "atr": float(self.atr) if self.atr else None,
+        }
+
+
+class ClosedPosition(Base):
+    """Closed trading positions."""
+
+    __tablename__ = "closed_positions"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    pair = Column(Text, nullable=False)
+    side = Column(Text, nullable=False)
+    volume = Column(Numeric(28, 10), nullable=False)
+    entry_price = Column(Numeric(20, 10), nullable=False)
+    activation_atr = Column(Numeric(20, 10), nullable=True)
+    activation_price = Column(Numeric(20, 10), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    activated_at = Column(DateTime(timezone=True), nullable=True)
+    trailing_price = Column(Numeric(20, 10), nullable=True)
+    stop_price = Column(Numeric(20, 10), nullable=True)
+    stop_atr = Column(Numeric(20, 10), nullable=True)
+    closing_price = Column(Numeric(20, 10), nullable=False)
+    closing_order_id = Column(Text, nullable=False, unique=True)
+    closed_at = Column(DateTime(timezone=True), nullable=False)
+    pnl_percent = Column(Numeric(10, 4), nullable=False)
+    inserted_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        CheckConstraint("side IN ('buy', 'sell')", name="ck_closed_positions_side_valid"),
+        CheckConstraint("volume > 0", name="ck_closed_positions_volume_positive"),
+        CheckConstraint("entry_price > 0", name="ck_closed_positions_entry_price_positive"),
+        CheckConstraint("closing_price > 0", name="ck_closed_positions_closing_price_positive"),
+        Index("ix_closed_positions_pair_closed_at_desc", pair, desc(closed_at)),
+        Index("ix_closed_positions_closed_at_desc", desc(closed_at)),
+    )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "pair": self.pair,
+            "side": self.side,
+            "volume": float(self.volume),
+            "entry_price": float(self.entry_price),
+            "activation_atr": float(self.activation_atr) if self.activation_atr else None,
+            "activation_price": float(self.activation_price) if self.activation_price else None,
+            "created_at": self.created_at,
+            "activated_at": self.activated_at,
+            "trailing_price": float(self.trailing_price) if self.trailing_price else None,
+            "stop_price": float(self.stop_price) if self.stop_price else None,
+            "stop_atr": float(self.stop_atr) if self.stop_atr else None,
+            "closing_price": float(self.closing_price),
+            "closing_order_id": self.closing_order_id,
+            "closed_at": self.closed_at,
+            "pnl_percent": float(self.pnl_percent),
+        }
+
+
+class TrailingState(Base):
+    """Active trailing positions state."""
+
+    __tablename__ = "trailing_state"
+
+    pair = Column(Text, primary_key=True, nullable=False)
+    side = Column(Text, nullable=False)
+    volume = Column(Numeric(28, 10), nullable=False)
+    entry_price = Column(Numeric(20, 10), nullable=False)
+    activation_atr = Column(Numeric(20, 10), nullable=False)
+    activation_price = Column(Numeric(20, 10), nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False)
+    activated_at = Column(DateTime(timezone=True), nullable=True)
+    trailing_price = Column(Numeric(20, 10), nullable=True)
+    stop_price = Column(Numeric(20, 10), nullable=True)
+    stop_atr = Column(Numeric(20, 10), nullable=True)
+    closing_order_id = Column(Text, nullable=True)
+    closing_price = Column(Numeric(20, 10), nullable=True)
+    closing_requested_at = Column(DateTime(timezone=True), nullable=True)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        CheckConstraint("side IN ('buy', 'sell')", name="ck_trailing_state_side_valid"),
+        CheckConstraint("volume > 0", name="ck_trailing_state_volume_positive"),
+        CheckConstraint("entry_price > 0", name="ck_trailing_state_entry_price_positive"),
+        CheckConstraint(
+            "(trailing_price IS NULL AND stop_price IS NULL AND stop_atr IS NULL) OR "
+            "(trailing_price IS NOT NULL AND stop_price IS NOT NULL AND stop_atr IS NOT NULL)",
+            name="ck_trailing_state_stop_fields_consistent",
+        ),
+        Index("ix_trailing_state_closing_order_id", closing_order_id),
+    )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "pair": self.pair,
+            "side": self.side,
+            "volume": float(self.volume),
+            "entry_price": float(self.entry_price),
+            "activation_atr": float(self.activation_atr),
+            "activation_price": float(self.activation_price),
+            "created_at": self.created_at,
+            "activated_at": self.activated_at,
+            "trailing_price": float(self.trailing_price) if self.trailing_price else None,
+            "stop_price": float(self.stop_price) if self.stop_price else None,
+            "stop_atr": float(self.stop_atr) if self.stop_atr else None,
+            "closing_order_id": self.closing_order_id,
+            "closing_price": float(self.closing_price) if self.closing_price else None,
+            "closing_requested_at": self.closing_requested_at,
+            "updated_at": self.updated_at,
+        }
+
+
+class BotControl(Base):
+    """Bot control flags and settings."""
+
+    __tablename__ = "bot_control"
+
+    control_key = Column(Text, primary_key=True, nullable=False)
+    control_value = Column(Text, nullable=False)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+    updated_by = Column(Text, nullable=True)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "control_key": self.control_key,
+            "control_value": self.control_value,
+            "updated_at": self.updated_at,
+            "updated_by": self.updated_by,
+        }
+
+
+# ============================================================================
+# Session Management
+# ============================================================================
+
+
+@contextmanager
+def get_session() -> Iterator[Session]:
+    """Context manager for database sessions."""
+    session = SessionLocal()
+    try:
+        yield session
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Database session error: {e}")
+        raise
+    finally:
+        session.close()
+
+
+# ============================================================================
+# OHLC Data Operations
+# ============================================================================
+
+
+def load_ohlc_data(
+    pair: str, timeframe: int, since_timestamp: Optional[int] = None, limit: Optional[int] = None
+) -> pd.DataFrame:
+    """Load OHLC data from the database.
+
+    Args:
+        pair: Trading pair.
+        timeframe: Candle timeframe in minutes.
+        since_timestamp: Optional Unix timestamp filter.
+        limit: Optional maximum number of rows to return.
+
+    Returns:
+        A DataFrame indexed by dtime, or an empty DataFrame when no rows match.
+    """
+    try:
+        with get_session() as session:
+            query = session.query(OHLCData).filter(
+                and_(OHLCData.pair == pair, OHLCData.timeframe_minutes == timeframe)
+            )
+            if since_timestamp is not None:
+                since_dt = datetime.fromtimestamp(since_timestamp, tz=timezone.utc)
+                query = query.filter(OHLCData.dtime >= since_dt)
+            if limit is not None:
+                query = query.limit(limit)
+            records = query.order_by(OHLCData.dtime).all()
+            if not records:
+                return pd.DataFrame()
+            df = pd.DataFrame([r.to_dict() for r in records])
+            df.set_index("dtime", drop=False, inplace=True)
+            logger.debug(f"Fetched {len(df)} OHLC records for {pair}")
+            return df
+    except Exception as e:
+        logger.error(f"Error fetching OHLC data for {pair}: {e}")
+        return pd.DataFrame()
+
+
+def save_ohlc_data(pair: str, timeframe: int, df: pd.DataFrame) -> None:
+    """Save OHLC data to the database.
+
+    Args:
+        pair: Trading pair.
+        timeframe: Candle timeframe in minutes.
+        df: DataFrame containing OHLC columns and indexed by dtime.
+    """
+    try:
+        if df.empty:
+            logger.warning(f"Empty DataFrame provided for {pair}")
+            return
+        working_df = df.copy()
+        with get_session() as session:
+            records = [
+                OHLCData(
+                    pair=pair,
+                    timeframe_minutes=timeframe,
+                    dtime=dtime,
+                    open=Decimal(str(row["open"])),
+                    high=Decimal(str(row["high"])),
+                    low=Decimal(str(row["low"])),
+                    close=Decimal(str(row["close"])),
+                    vwap=Decimal(str(row["vwap"])) if "vwap" in row and pd.notna(row["vwap"]) else None,
+                    volume=Decimal(str(row["volume"])) if "volume" in row and pd.notna(row["volume"]) else None,
+                    count=int(row["count"]) if "count" in row and pd.notna(row["count"]) else None,
+                    atr=Decimal(str(row["atr"])) if "atr" in row and pd.notna(row["atr"]) else None,
+                )
+                for dtime, row in working_df.iterrows()
+            ]
+            session.add_all(records)
+            logger.info(f"Saved {len(records)} OHLC records for {pair}")
+    except Exception as e:
+        logger.error(f"Error saving OHLC data for {pair}: {e}")
+        raise
+
+
+# ============================================================================
+# Health Check
+# ============================================================================
+
+
+def check_database_connection() -> bool:
+    """Verify database connection is working."""
+    try:
+        with get_session() as session:
+            session.execute("SELECT 1")
+        logger.info("Database connection successful")
+        return True
+    except Exception as e:
+        logger.error(f"Database connection failed: {e}")
+        return False
