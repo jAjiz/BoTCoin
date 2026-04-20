@@ -255,6 +255,23 @@ def get_session() -> Iterator[Session]:
 
 
 # ============================================================================
+# Health Check
+# ============================================================================
+
+
+def check_database_connection() -> bool:
+    """Verify database connection is working."""
+    try:
+        with get_session() as session:
+            session.execute("SELECT 1")
+        logger.info("Database connection successful")
+        return True
+    except Exception as e:
+        logger.error(f"Database connection failed: {e}")
+        return False
+
+
+# ============================================================================
 # OHLC Data Operations
 # ============================================================================
 
@@ -330,23 +347,6 @@ def save_ohlc_data(pair: str, timeframe: int, df: pd.DataFrame) -> None:
     except Exception as e:
         logger.error(f"Error saving OHLC data for {pair}: {e}")
         raise
-
-
-# ============================================================================
-# Health Check
-# ============================================================================
-
-
-def check_database_connection() -> bool:
-    """Verify database connection is working."""
-    try:
-        with get_session() as session:
-            session.execute("SELECT 1")
-        logger.info("Database connection successful")
-        return True
-    except Exception as e:
-        logger.error(f"Database connection failed: {e}")
-        return False
 
 
 # ============================================================================
