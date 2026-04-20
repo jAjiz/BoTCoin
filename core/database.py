@@ -600,7 +600,7 @@ def get_bot_paused() -> bool:
     """Get bot paused state from bot_control table."""
     value = get_control_value("bot_paused")
     if value is None:
-        return False
+        raise ValueError("Bot paused state not found in control table")
     return str(value).strip().lower() == "true"
 
 
