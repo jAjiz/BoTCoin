@@ -1,6 +1,5 @@
 import core.logging as logging
 from core.config import MIN_VALUE, TRADING_PARAMS
-from core.state import load_closed_positions
 from core.utils import now_str
 from exchange.kraken import place_limit_order
 from trading.inventory_manager import calculate_position
@@ -17,22 +16,13 @@ def create_position(pair, balance, last_prices, atr_val, trailing_state):
     if volume <= 0:
         logging.warning(f"Cannot create {side.upper()} position: volume {volume:.8f} <= 0")
         return
-    
-    # Get entry_price from last closed position with opposite side
-    entry_price = current_price
-    closed_positions = load_closed_positions()
-    if pair in closed_positions and closed_positions[pair]:
-        for pos in reversed(closed_positions[pair]):
-            if pos.get("side") != side:
-                entry_price = pos.get("closing_price", current_price)
-                break
 
-    activation_price = calculate_activation_price(pair, side, entry_price, atr_val)
+    activation_price = calculate_activation_price(pair, side, current_price, atr_val)
 
     trailing_state[pair] = {
         "side": side,
         "volume": round(volume, 8),
-        "entry_price": entry_price,
+        "entry_price": current_price,
         "activation_atr": round(atr_val, 1),
         "activation_price": round(activation_price, 1),
         "creation_time": now_str()

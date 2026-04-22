@@ -45,11 +45,6 @@ def test_create_position_builds_state_from_calculated_values(monkeypatch) -> Non
         "calculate_position",
         lambda pair, balance, prices, state: ("buy", 100.0),
     )
-    monkeypatch.setattr(
-        positions_manager,
-        "load_closed_positions",
-        lambda: {"XBTEUR": [{"side": "sell", "closing_price": 90.0}]},
-    )
     monkeypatch.setattr(positions_manager, "calculate_activation_price", lambda *args: 85.0)
     monkeypatch.setattr(positions_manager, "now_str", lambda: "2026-01-01 00:00:00")
 
@@ -65,7 +60,7 @@ def test_create_position_builds_state_from_calculated_values(monkeypatch) -> Non
     assert "XBTEUR" in trailing_state
     assert trailing_state["XBTEUR"]["side"] == "buy"
     assert trailing_state["XBTEUR"]["volume"] == 1.0
-    assert trailing_state["XBTEUR"]["entry_price"] == 90.0
+    assert trailing_state["XBTEUR"]["entry_price"] == 100.0
     assert trailing_state["XBTEUR"]["activation_price"] == 85.0
 
 
