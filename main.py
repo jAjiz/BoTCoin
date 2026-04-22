@@ -66,12 +66,12 @@ def trading_session():
         current_price = last_prices.get(pair, None)
         current_atr = call_with_retry(get_current_atr, pair)
 
-        if _session_count % PARAM_SESSIONS == 0:
-            calculate_trading_parameters(pair)
-
         if current_price is None or current_atr is None:
             logging.error(f"Could not fetch price or ATR. Skipping this pair.")
             continue
+
+        if _session_count % PARAM_SESSIONS == 0:
+            calculate_trading_parameters(pair)
 
         vol_level = get_volatility_level(pair, current_atr)
         logging.info(f"Market: {current_price:,.1f}€ | ATR: {current_atr:,.1f}€ ({vol_level})")
