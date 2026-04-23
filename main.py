@@ -4,11 +4,11 @@ import time
 from datetime import datetime
 import core.logging as logging
 import core.runtime as runtime
+import core.database as db
 import services.telegram as telegram
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from exchange.kraken import get_balance, get_last_prices, get_order_status
-from core.state import load_trailing_state, save_trailing_state, save_closed_position
 from core.config import SLEEPING_INTERVAL, PAIRS, PARAM_SESSIONS, ATR_DESV_LIMIT, TELEGRAM_ENABLED
 from core.validation import validate_config
 from core.utils import now_str
@@ -48,7 +48,7 @@ def trading_session():
         return
 
     logging.info("======== STARTING SESSION ========")
-    trailing_state = load_trailing_state()
+    trailing_state = {}
 
     current_balance = call_with_retry(get_balance)
     if current_balance is None:
@@ -63,6 +63,7 @@ def trading_session():
 
     for pair in PAIRS.keys():
         logging.info(f"--- Processing pair: [{pair}] ---")
+        trailing_state[pair] = db.load_trailing_state(pair)
         current_price = last_prices.get(pair, None)
         current_atr = call_with_retry(get_current_atr, pair)
 
@@ -83,7 +84,9 @@ def trading_session():
         if check_open_position(pair, trailing_state):
             update_trailing_state(pair, current_balance, last_prices, current_atr, trailing_state)
 
-    save_trailing_state(trailing_state)
+        if trailing_state.get(pair):
+            db.save_trailing_state(pair, trailing_state[pair])
+
     runtime.update_trailing_state(trailing_state)
 
     _session_count += 1
@@ -130,11 +133,12 @@ def check_closed_position(pair, trailing_state):
     if pair not in trailing_state or not trailing_state[pair]:
         return True
     
-    closing_order = trailing_state[pair].get("closing_order")
+    closing_order = trailing_state[pair].get("closing_order_id")
     if closing_order:
         status = get_order_status(closing_order)
         if status and status not in ["pending", "open"]:
-            save_closed_position(pair, trailing_state[pair])
+            db.save_closed_position(pair, trailing_state[pair])
+            db.delete_trailing_state(pair)
             del trailing_state[pair]
             logging.info(f"Trailing position removed for {pair}.")
             return True
@@ -146,7 +150,7 @@ def check_open_position(pair, trailing_state):
     if pair not in trailing_state or not trailing_state[pair]:
         return False
     
-    closing_order = trailing_state[pair].get("closing_order")
+    closing_order = trailing_state[pair].get("closing_order_id")
     if closing_order:
         return False
     
@@ -173,7 +177,7 @@ def update_trailing_state(pair, current_balance, last_prices, current_atr, trail
         # Activation check
         if (side == "sell" and current_price >= pos["activation_price"]) or \
             (side == "buy" and current_price <= pos["activation_price"]):
-            pos["activation_time"] = now_str()
+            pos["activated_at"] = now_str()
             logging.info(f"[{pair}] ⚡ Activation price {pos['activation_price']:,}€ reached for {side.upper()} position.",
                             to_telegram=True)
             update_stop_price(pair, pos, current_price, current_atr)

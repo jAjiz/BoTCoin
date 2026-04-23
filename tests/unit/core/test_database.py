@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -447,7 +447,6 @@ def test_check_database_connection_failure(monkeypatch):
 def _make_closed_position_data(**overrides) -> dict:
     """Return a minimal valid closed position data dict."""
     data = {
-        "pair": "XBTEUR",
         "side": "buy",
         "volume": Decimal("0.5"),
         "entry_price": Decimal("50000"),
@@ -460,7 +459,6 @@ def _make_closed_position_data(**overrides) -> dict:
         "stop_atr": None,
         "closing_price": Decimal("50500"),
         "closing_order_id": "order_12345",
-        "closed_at": datetime(2026, 4, 1, 14, 0, 0),
         "pnl_percent": Decimal("1.0"),
     }
     data.update(overrides)
@@ -475,7 +473,7 @@ def _make_trailing_state_entry(**overrides) -> dict:
         "entry_price": 50000.0,
         "activation_atr": 200.0,
         "activation_price": 50100.0,
-        "creation_time": "2026-04-01 10:00:00",
+        "created_at": "2026-04-01 10:00:00",
     }
     data.update(overrides)
     return data
@@ -486,7 +484,7 @@ def test_save_closed_position(monkeypatch):
     session = FakeSession()
     patch_get_session(monkeypatch, session)
 
-    save_closed_position(_make_closed_position_data())
+    save_closed_position("XBTEUR", _make_closed_position_data())
 
     assert len(session.added_records) == 1
     saved = session.added_records[0]
@@ -501,7 +499,7 @@ def test_save_closed_position_optional_fields_none(monkeypatch):
     session = FakeSession()
     patch_get_session(monkeypatch, session)
 
-    save_closed_position(_make_closed_position_data())
+    save_closed_position("XBTEUR", _make_closed_position_data())
 
     saved = session.added_records[0]
     assert saved.activation_atr is None
@@ -517,7 +515,6 @@ def test_save_closed_position_optional_fields_populated(monkeypatch):
     patch_get_session(monkeypatch, session)
 
     data = _make_closed_position_data(
-        pair="ETHEUR",
         side="sell",
         activation_atr=Decimal("50"),
         activated_at=datetime(2026, 4, 2, 10, 0, 0),
@@ -525,11 +522,11 @@ def test_save_closed_position_optional_fields_populated(monkeypatch):
         stop_price=Decimal("3020"),
         stop_atr=Decimal("40"),
     )
-    save_closed_position(data)
+    save_closed_position("ETHEUR", data)
 
     saved = session.added_records[0]
     assert saved.pair == "ETHEUR"
-    assert saved.activated_at == datetime(2026, 4, 2, 10, 0, 0)
+    assert saved.activated_at == datetime(2026, 4, 2, 10, 0, 0, tzinfo=timezone.utc)
     assert float(saved.trailing_price) == 2980.0
     assert float(saved.stop_atr) == 40.0
 
@@ -539,7 +536,7 @@ def test_save_closed_position_raises_on_db_error(monkeypatch):
     patch_get_session_error(monkeypatch)
 
     with pytest.raises(Exception, match="DB error"):
-        save_closed_position(_make_closed_position_data())
+        save_closed_position("XBTEUR", _make_closed_position_data())
 
 
 def test_load_closed_positions_with_records(monkeypatch, closed_position_record):
@@ -639,9 +636,9 @@ def test_save_trailing_state_with_optional_fields(monkeypatch):
             trailing_price=50400.0,
             stop_price=50200.0,
             stop_atr=150.0,
-            closing_order="close_123",
+            closing_order_id="close_123",
             closing_price=50150.0,
-            closing_time="2026-04-01 11:15:00",
+            closing_requested_at="2026-04-01 11:15:00",
             activated_at="2026-04-01 10:30:00",
         ),
     )
@@ -705,7 +702,7 @@ def test_load_trailing_state(monkeypatch, pair, records, expect_found):
         assert result is not None
         assert result["side"] == "buy"
         assert result["activation_price"] == 50100.0
-        assert result["creation_time"] == "2026-04-01 10:00:00"
+        assert result["created_at"] == "2026-04-01 10:00:00"
     else:
         assert result is None
     assert session.query_obj.filter_calls == 1

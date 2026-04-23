@@ -287,16 +287,14 @@ def _state_entry_to_trailing_record(pair: str, position_data: Dict[str, Any]) ->
         entry_price=Decimal(str(position_data["entry_price"])),
         activation_atr=Decimal(str(position_data["activation_atr"])),
         activation_price=Decimal(str(position_data["activation_price"])),
-        created_at=_to_utc_datetime(position_data.get("created_at") or position_data.get("creation_time")),
+        created_at=_to_utc_datetime(position_data["created_at"]),
         activated_at=_to_utc_datetime(position_data.get("activated_at")),
         trailing_price=_to_decimal(position_data.get("trailing_price")),
         stop_price=_to_decimal(position_data.get("stop_price")),
         stop_atr=_to_decimal(position_data.get("stop_atr")),
-        closing_order_id=position_data.get("closing_order_id") or position_data.get("closing_order"),
+        closing_order_id=position_data.get("closing_order_id"),
         closing_price=_to_decimal(position_data.get("closing_price")),
-        closing_requested_at=_to_utc_datetime(
-            position_data.get("closing_requested_at") or position_data.get("closing_time")
-        ),
+        closing_requested_at=_to_utc_datetime(position_data.get("closing_requested_at")),
     )
 
 
@@ -307,7 +305,7 @@ def _trailing_record_to_state_entry(record: TrailingState) -> Dict[str, Any]:
         "entry_price": float(record.entry_price),
         "activation_atr": float(record.activation_atr),
         "activation_price": float(record.activation_price),
-        "creation_time": _format_state_datetime(record.created_at),
+        "created_at": _format_state_datetime(record.created_at),
     }
     if record.activated_at is not None:
         state_entry["activated_at"] = _format_state_datetime(record.activated_at)
@@ -318,11 +316,11 @@ def _trailing_record_to_state_entry(record: TrailingState) -> Dict[str, Any]:
     if record.stop_atr is not None:
         state_entry["stop_atr"] = float(record.stop_atr)
     if record.closing_order_id is not None:
-        state_entry["closing_order"] = record.closing_order_id
+        state_entry["closing_order_id"] = record.closing_order_id
     if record.closing_price is not None:
         state_entry["closing_price"] = float(record.closing_price)
     if record.closing_requested_at is not None:
-        state_entry["closing_time"] = _format_state_datetime(record.closing_requested_at)
+        state_entry["closing_requested_at"] = _format_state_datetime(record.closing_requested_at)
     return state_entry
 
 
@@ -336,7 +334,7 @@ def check_database_connection() -> bool:
     try:
         with get_session() as session:
             session.execute("SELECT 1")
-        logger.info("Database connection successful")
+        logger.debug("Database connection successful")
         return True
     except Exception as e:
         logger.error(f"Database connection failed: {e}")
@@ -415,7 +413,7 @@ def save_ohlc_data(pair: str, timeframe: int, df: pd.DataFrame) -> None:
                 for _, row in working_df.iterrows()
             ]
             session.add_all(records)
-            logger.info(f"Saved {len(records)} OHLC records for {pair}")
+            logger.debug(f"Saved {len(records)} OHLC records for {pair}")
     except Exception as e:
         logger.error(f"Error saving OHLC data for {pair}: {e}")
         raise
@@ -426,34 +424,35 @@ def save_ohlc_data(pair: str, timeframe: int, df: pd.DataFrame) -> None:
 # ============================================================================
 
 
-def save_closed_position(position_data: Dict[str, Any]) -> None:
+def save_closed_position(pair: str, position_data: Dict[str, Any]) -> None:
     """Persist a closed position to the database.
 
     Args:
+        pair: Trading pair.
         position_data: Dictionary containing closed position details.
     """
     try:
         record = ClosedPosition(
-            pair=position_data["pair"],
+            pair=pair,
             side=position_data["side"],
             volume=Decimal(str(position_data["volume"])),
             entry_price=Decimal(str(position_data["entry_price"])),
             activation_atr=_to_decimal(position_data.get("activation_atr")),
             activation_price=_to_decimal(position_data.get("activation_price")),
-            created_at=position_data["created_at"],
-            activated_at=position_data.get("activated_at"),
+            created_at=_to_utc_datetime(position_data["created_at"]),
+            activated_at=_to_utc_datetime(position_data.get("activated_at")),
             trailing_price=_to_decimal(position_data.get("trailing_price")),
             stop_price=_to_decimal(position_data.get("stop_price")),
             stop_atr=_to_decimal(position_data.get("stop_atr")),
             closing_price=Decimal(str(position_data["closing_price"])),
             closing_order_id=position_data["closing_order_id"],
-            closed_at=position_data["closed_at"],
+            closed_at=datetime.now(timezone.utc),
             pnl_percent=Decimal(str(position_data["pnl_percent"])),
         )
         with get_session() as session:
             session.add(record)
-        logger.info(
-            f"Saved closed position for {position_data['pair']} "
+        logger.debug(
+            f"Saved closed position for {pair} "
             f"order {position_data['closing_order_id']}"
         )
     except Exception as e:
@@ -505,7 +504,7 @@ def save_trailing_state(pair: str, position_data: Dict[str, Any]) -> None:
     try:
         with get_session() as session:
             session.merge(_state_entry_to_trailing_record(pair, position_data))
-        logger.info(f"Saved trailing state for {pair}")
+        logger.debug(f"Saved trailing state for {pair}")
     except Exception as e:
         logger.error(f"Error saving trailing state for {pair}: {e}")
         raise
@@ -549,7 +548,7 @@ def delete_trailing_state(pair: str) -> bool:
                 logger.debug(f"No trailing state found for {pair}")
                 return False
             session.delete(record)
-        logger.info(f"Deleted trailing state for {pair}")
+        logger.debug(f"Deleted trailing state for {pair}")
         return True
     except Exception as e:
         logger.error(f"Error deleting trailing state for {pair}: {e}")
@@ -585,7 +584,7 @@ def set_control_value(control_key: str, control_value: str, updated_by: Optional
                     updated_by=updated_by,
                 )
             )
-        logger.info(f"Saved control value for {control_key}")
+        logger.debug(f"Saved control value for {control_key}")
     except Exception as e:
         logger.error(f"Error saving control value for {control_key}: {e}")
         raise

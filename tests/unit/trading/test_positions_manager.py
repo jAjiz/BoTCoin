@@ -62,6 +62,7 @@ def test_create_position_builds_state_from_calculated_values(monkeypatch) -> Non
     assert trailing_state["XBTEUR"]["volume"] == 1.0
     assert trailing_state["XBTEUR"]["entry_price"] == 100.0
     assert trailing_state["XBTEUR"]["activation_price"] == 85.0
+    assert trailing_state["XBTEUR"]["created_at"] == "2026-01-01 00:00:00"
 
 
 def test_close_position_updates_position_on_success(monkeypatch) -> None:
@@ -73,9 +74,10 @@ def test_close_position_updates_position_on_success(monkeypatch) -> None:
 
     positions_manager.close_position("XBTEUR", pos, prices)
 
-    assert pos["closing_order"] == "ORDER123"
+    assert pos["closing_order_id"] == "ORDER123"
+    assert pos["closing_requested_at"] == "2026-01-01 12:00:00"
     assert pos["closing_price"] == 90.0
-    assert pos["pnl"] == -10.0
+    assert pos["pnl_percent"] == -10.0
 
 
 def test_update_activation_price_updates_position_fields(monkeypatch) -> None:

@@ -25,7 +25,7 @@ def create_position(pair, balance, last_prices, atr_val, trailing_state):
         "entry_price": current_price,
         "activation_atr": round(atr_val, 1),
         "activation_price": round(activation_price, 1),
-        "creation_time": now_str()
+        "created_at": now_str()
     }
     
     logging.info(f"[{pair}] 🆕 New {side.upper()} position: activation at {activation_price:,.1f}€",
@@ -129,9 +129,9 @@ def close_position(pair, pos, last_prices):
         pos.update({
             "volume": round(volume, 8),
             "closing_price": current_price,
-            "closing_order": closing_order,
-            "closing_time": now_str(),
-            "pnl": round(pnl, 2)
+            "closing_order_id": closing_order,
+            "closing_requested_at": now_str(),
+            "pnl_percent": round(pnl, 4)
         })
     except Exception as e:
         logging.error(f"Failed to close trailing position: {e}", to_telegram=True)
