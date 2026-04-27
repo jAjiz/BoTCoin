@@ -17,10 +17,16 @@ class PositionDetail(BaseModel):
     side: str
     volume: float
     entry_price: float
+    activation_atr: float
     activation_price: float
+    created_at: datetime
+    activated_at: Optional[datetime] = None
     trailing_price: Optional[float] = None
     stop_price: Optional[float] = None
-    estimated_pnl_percent: Optional[float] = None
+    stop_atr: Optional[float] = None
+    closing_order_id: Optional[str] = None
+    closing_price: Optional[float] = None
+    closing_requested_at: Optional[datetime] = None
 
 
 class PositionResponse(BaseModel):

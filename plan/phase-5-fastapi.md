@@ -283,8 +283,8 @@ for r in (market, positions, balance, status, control):
 | ------------------------- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------- |
 | `GET /market`             | `[{pair, last_price, atr, volatility_level}, ...]` for every configured pair                           | `runtime.get_pair_data(pair)` per `PAIRS.keys()`                       |
 | `GET /market/{pair}`      | Single market object; `404` if `pair not in PAIRS`; fields may be null before first tick               | `runtime.get_pair_data(pair)`                                          |
-| `GET /positions`          | `{pair: {…position fields…, estimated_pnl_percent: float \| null} \| null, ...}` for every configured pair | `db.load_trailing_state(pair)` + `runtime.get_pair_data(pair)` for PnL |
-| `GET /positions/{pair}`   | Single position object or `{pair, position: null}`; `404` on unknown pair                              | Same as above                                                          |
+| `GET /positions`          | `{pair: {…position fields…} \| null, ...}` for every configured pair — all fields from `load_trailing_state`, no PnL | `db.load_trailing_state(pair)`                                         |
+| `GET /positions/{pair}`   | Single position object or `{pair, position: null}`; `404` on unknown pair                              | `db.load_trailing_state(pair)`                                         |
 | `GET /balance`            | `{balance: {asset: amount}}`                                                                           | `runtime.get_last_balance()`                                           |
 | `GET /status`             | `{paused: bool, last_run_at: iso8601 \| null}`                                                         | `db.get_bot_paused()` + `runtime.get_last_run_at()`                    |
 | `POST /control/pause`     | `{paused: true, updated_by: str \| null}`; idempotent (no-op if already paused)                         | `db.set_bot_paused(True, updated_by=...)`                              |
@@ -294,21 +294,9 @@ POST bodies accept `{"updated_by": "telegram"}` (optional). Use Pydantic models 
 
 ### 3.4 PnL calculation
 
-In `api/routes/positions.py`, replicate the logic from `services/telegram.py:172–187` in one helper:
+PnL is **not** calculated in the API. The `/positions` endpoint returns raw position data from `db.load_trailing_state(pair)` only — a single, clean data source with no mixing of DB state and in-memory runtime values.
 
-```python
-def estimated_pnl_percent(pos, last_price):
-    trailing_price = pos.get("trailing_price")
-    stop_price = pos.get("stop_price")
-    if trailing_price is None or stop_price is None:
-        return None
-    entry_price = pos["entry_price"]
-    if pos["side"] == "sell":
-        return (stop_price - entry_price) / entry_price * 100
-    return (entry_price - stop_price) / entry_price * 100
-```
-
-The API owns this calculation from now on; do not duplicate it in the Telegram service.
+PnL is computed in the Telegram service (`services/telegram/polling.py`) using the current price from `GET /market`, at the moment the user requests `/positions`. This keeps each service responsible for its own presentation logic.
 
 ### 3.5 `main.py`
 
@@ -399,7 +387,7 @@ Mapping:
 | `/pause`           | `POST /control/pause` with body `{"updated_by": "telegram"}`              | Reply with returned `paused` state                           |
 | `/resume`          | `POST /control/resume` with body `{"updated_by": "telegram"}`             | Same                                                         |
 | `/market [pair]`   | `GET /market` (or `/market/{pair}`) + `GET /balance`                      | Reuse template from `market_command` (telegram.py:116–130)   |
-| `/positions [pair]`| `GET /positions` (or `/positions/{pair}`)                                 | Reuse template from `positions_command` (telegram.py:148–189); drop local PnL calc (the API returns it) |
+| `/positions [pair]`| `GET /positions` (or `/positions/{pair}`) + `GET /market` for current price | Reuse template from `positions_command` (telegram.py:148–189); compute PnL locally from position `stop_price`/`entry_price` and `last_price` from market response |
 
 ### 4.5 Entrypoint
 
@@ -519,7 +507,7 @@ The `test` service still runs `pytest` against a live Postgres. No new services 
 Use `fastapi.testclient.TestClient`. Skip the lifespan for most tests by using `TestClient(app)` with `raise_server_exceptions=False` where appropriate, or instantiate routes directly.
 
 - `test_market_routes.py` — monkeypatch `core.runtime.get_pair_data`; assert list shape, `404` on unknown pair.
-- `test_positions_routes.py` — monkeypatch `core.database.load_trailing_state` + `core.runtime.get_pair_data`; three cases: no position, pending activation (PnL null), trailing active (PnL computed).
+- `test_positions_routes.py` — monkeypatch `core.database.load_trailing_state`; three cases: no position, pending activation (no trailing fields), trailing active (trailing/stop fields populated).
 - `test_balance_routes.py` — monkeypatch `core.runtime.get_last_balance`.
 - `test_status_routes.py` — monkeypatch `core.database.get_bot_paused` + `core.runtime.get_last_run_at`; assert the response shape and that `last_run_at` is `null` before the first tick.
 - `test_control_routes.py` — monkeypatch `core.database.set_bot_paused`; assert `updated_by` is passed through and idempotency holds.
