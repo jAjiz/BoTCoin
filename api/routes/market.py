@@ -11,6 +11,7 @@ def _build_market_item(pair: str) -> MarketItem:
     data = runtime.get_pair_data(pair)
     return MarketItem(
         pair=pair,
+        base_asset=PAIRS[pair].get("base"),
         last_price=data.get("last_price"),
         atr=data.get("atr"),
         volatility_level=data.get("volatility_level"),

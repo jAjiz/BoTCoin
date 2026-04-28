@@ -117,7 +117,7 @@ async def market_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             price = item.get("last_price")
             atr = item.get("atr")
             vol = item.get("volatility_level", "N/A")
-            asset = PAIRS[pair].get("base")
+            asset = item.get("base_asset")
             asset_balance = float(balance.get(asset, 0))
             asset_value_eur = asset_balance * price if price else 0
             msg += (

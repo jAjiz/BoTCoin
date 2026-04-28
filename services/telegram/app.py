@@ -26,8 +26,16 @@ async def lifespan(app: FastAPI):
     await tg_app.start()
     await tg_app.updater.start_polling(poll_interval=TELEGRAM_POLL_INTERVAL)
     try:
+        await tg_app.bot.send_message(
+            chat_id=int(TELEGRAM_USER_ID),
+            text="🤖 BoTC started and running. Use /help to see available commands.",
+        )
         yield
     finally:
+        await tg_app.bot.send_message(
+            chat_id=int(TELEGRAM_USER_ID),
+            text="🤖 BoTC is off, see you soon",
+        )
         await tg_app.updater.stop()
         await tg_app.stop()
         await tg_app.shutdown()

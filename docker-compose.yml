@@ -50,7 +50,7 @@ services:
     container_name: botc-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-botc}
+      POSTGRES_DB: ${POSTGRES_DB:-DBbotc}
       POSTGRES_USER: ${POSTGRES_USER:-botc}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:

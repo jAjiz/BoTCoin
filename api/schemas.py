@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 class MarketItem(BaseModel):
     pair: str
+    base_asset: Optional[str] = None
     last_price: Optional[float] = None
     atr: Optional[float] = None
     volatility_level: Optional[str] = None
