@@ -1,16 +1,17 @@
 from datetime import UTC, datetime
+from typing import Any
 
 
 def now_utc() -> datetime:
     return datetime.now(UTC)
 
 
-def print_pair_argument_error():
+def print_pair_argument_error() -> None:
     print("Error: PAIR parameter is required.")
     print("Use: python trading/market_analyzer.py PAIR=XBTEUR [ORDER=20] [SHOW_EVENTS] [Volatility=LL|LV|MV|HV|HH|ALL]")
 
 
-def print_statistics(events, vol_level, title):
+def print_statistics(events: list[dict[str, Any]], vol_level: str, title: str) -> None:
     if not events:
         print(f"\nNo events detected for {title}\n")
         return
@@ -32,7 +33,7 @@ def print_statistics(events, vol_level, title):
     print(f"Percentile 100%: {s.quantile(1.00):.2f} ATR (Extreme)")
 
 
-def print_events_detail(events, title, vol_level=None):
+def print_events_detail(events: list[dict[str, Any]], title: str, vol_level: str | None = None) -> None:
     if not events:
         return
     print(f"\n=== {title} ===")
@@ -58,13 +59,13 @@ def print_events_detail(events, title, vol_level=None):
 
 
 def print_structural_noise_results(
-    uptrend_events,
-    downtrend_events,
-    min_change_pct,
-    atr_percentiles,
-    show_events=False,
-    volatility_level=None,
-):
+    uptrend_events: list[dict[str, Any]],
+    downtrend_events: list[dict[str, Any]],
+    min_change_pct: float,
+    atr_percentiles: dict[str, float],
+    show_events: bool = False,
+    volatility_level: str | None = None,
+) -> None:
     print(f"--- Analyzing Market Structure (minimum change {min_change_pct * 100:.2f}%) ---")
 
     if volatility_level is None:

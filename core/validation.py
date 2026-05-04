@@ -18,7 +18,7 @@ from core.config import (
 from exchange.kraken import build_pairs_map
 
 
-def validate_common_params(errors):
+def validate_common_params(errors: list[str]) -> None:
     # Kraken API credentials
     if not KRAKEN_API_KEY:
         errors.append("KRAKEN_API_KEY is missing")
@@ -53,7 +53,7 @@ def validate_common_params(errors):
         errors.append("PAIRS is missing or empty")
 
 
-def build_and_validate_pairs(errors):
+def build_and_validate_pairs(errors: list[str]) -> None:
     try:
         build_pairs_map(PAIRS)
         if not any(PAIRS.values()):
@@ -62,7 +62,7 @@ def build_and_validate_pairs(errors):
         errors.append(f"Failed to fetch pairs: {e!s}")
 
 
-def log_configuration_summary():
+def log_configuration_summary() -> None:
     logging.info("=" * 60)
     logging.info("✅ CONFIGURATION VALIDATED SUCCESSFULLY")
     logging.info("=" * 60)
