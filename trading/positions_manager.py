@@ -140,4 +140,5 @@ def close_position(pair: str, pos: dict[str, Any], last_prices: dict[str, float]
             }
         )
     except Exception as e:
+        # Recoverable: scheduler must keep ticking; surface failure via Telegram.
         logging.error(f"Failed to close trailing position: {e}", to_telegram=True)
