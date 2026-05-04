@@ -284,14 +284,18 @@ def _to_decimal(value: Any) -> Decimal | None:
     return Decimal(str(value))
 
 
+def _to_decimal_required(value: Any) -> Decimal:
+    return Decimal(str(value))
+
+
 def _state_entry_to_trailing_record(pair: str, position_data: dict[str, Any]) -> TrailingState:
     return TrailingState(
         pair=pair,
         side=position_data["side"],
-        volume=Decimal(str(position_data["volume"])),
-        entry_price=Decimal(str(position_data["entry_price"])),
-        activation_atr=Decimal(str(position_data["activation_atr"])),
-        activation_price=Decimal(str(position_data["activation_price"])),
+        volume=_to_decimal_required(position_data["volume"]),
+        entry_price=_to_decimal_required(position_data["entry_price"]),
+        activation_atr=_to_decimal_required(position_data["activation_atr"]),
+        activation_price=_to_decimal_required(position_data["activation_price"]),
         created_at=position_data["created_at"],
         activated_at=position_data.get("activated_at"),
         trailing_price=_to_decimal(position_data.get("trailing_price")),
@@ -400,10 +404,10 @@ def save_ohlc_data(pair: str, timeframe: int, df: pd.DataFrame) -> None:
                 "pair": pair,
                 "timeframe_minutes": timeframe,
                 "time": int(row["time"]),
-                "open": Decimal(str(row["open"])),
-                "high": Decimal(str(row["high"])),
-                "low": Decimal(str(row["low"])),
-                "close": Decimal(str(row["close"])),
+                "open": _to_decimal_required(row["open"]),
+                "high": _to_decimal_required(row["high"]),
+                "low": _to_decimal_required(row["low"]),
+                "close": _to_decimal_required(row["close"]),
                 "vwap": Decimal(str(row["vwap"])) if "vwap" in row and pd.notna(row["vwap"]) else None,
                 "volume": Decimal(str(row["volume"])) if "volume" in row and pd.notna(row["volume"]) else None,
                 "count": int(row["count"]) if "count" in row and pd.notna(row["count"]) else None,
@@ -453,8 +457,8 @@ def save_closed_position(pair: str, position_data: dict[str, Any]) -> None:
         record = ClosedPosition(
             pair=pair,
             side=position_data["side"],
-            volume=Decimal(str(position_data["volume"])),
-            entry_price=Decimal(str(position_data["entry_price"])),
+            volume=_to_decimal_required(position_data["volume"]),
+            entry_price=_to_decimal_required(position_data["entry_price"]),
             activation_atr=_to_decimal(position_data.get("activation_atr")),
             activation_price=_to_decimal(position_data.get("activation_price")),
             created_at=position_data["created_at"],
@@ -462,10 +466,10 @@ def save_closed_position(pair: str, position_data: dict[str, Any]) -> None:
             trailing_price=_to_decimal(position_data.get("trailing_price")),
             stop_price=_to_decimal(position_data.get("stop_price")),
             stop_atr=_to_decimal(position_data.get("stop_atr")),
-            closing_price=Decimal(str(position_data["closing_price"])),
+            closing_price=_to_decimal_required(position_data["closing_price"]),
             closing_order_id=position_data["closing_order_id"],
             closed_at=datetime.now(UTC),
-            pnl_percent=Decimal(str(position_data["pnl_percent"])),
+            pnl_percent=_to_decimal_required(position_data["pnl_percent"]),
         )
         with get_session() as session:
             session.add(record)
