@@ -526,7 +526,7 @@ Explicitly out of scope — do not add any of these:
 - **Image vulnerability scanning** (Trivy, Snyk, GHCR's built-in scan UI). Worth doing later — not in this PR.
 - **CodeQL / Dependabot / GitHub Advanced Security features.** Outside V2 scope.
 - **Refactoring `scripts/entrypoint.sh`** so only the bot service runs migrations. Currently both services do; it's a no-op the second time. Leave as-is.
-- **A `CHANGELOG.md` entry** (Phase 8 owns the changelog introduction).
+- **A `CHANGELOG.md` entry** (Phase 9 owns the changelog introduction).
 
 ---
 
