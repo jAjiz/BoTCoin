@@ -42,4 +42,3 @@ RUN mkdir -p /app/logs \
 USER appuser
 
 ENTRYPOINT ["/app/scripts/entrypoint.sh"]
-CMD ["python", "main.py"]
