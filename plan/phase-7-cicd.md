@@ -24,7 +24,7 @@
   - **Production compose override**, not a separate file.** A new `docker-compose.prod.yml` only overrides `image:` and removes the `build:` block for `botc` and `telegram`. The existing `docker-compose.yml` stays buildable for local development.
   - **One workflow, not two.** A single `ci.yml` defines `lint`, `unit`, `integration`, `build-and-push`, and `deploy` jobs with `needs:` dependencies. The build/deploy jobs are gated to `push: main` via `if:`. This removes the `workflow_run` indirection from the previous draft and keeps the entire pipeline visible in one file.
   - **Solo-developer flow.** Once Phase 7 lands, subsequent phases are developed by committing directly to `main`. The `needs:` chain in `ci.yml` is the enforced gate: a failing test blocks the deploy job from running, regardless of how the commit reached `main`. Branch protection is **optional** and called out as such in the README.
-  - **The VPS becomes a thin runtime.** It hosts a clone of the repo (for compose files + `.env`) and pulls images on command. The new deploy invocation is short enough to inline in the workflow — no `deploy_BoTC.sh` needed. The old script is deleted from the VPS as part of the manual bootstrap.
+  - **The VPS becomes a thin runtime.** It holds only a deploy directory with `.env` and the two compose files — no repo clone, no source code. The deploy job fetches `docker-compose.yml` and `docker-compose.prod.yml` directly from `raw.githubusercontent.com` at the exact commit SHA being deployed, then runs `docker compose pull && up -d`. Disk footprint on the VPS is two text files plus Docker images and the PostgreSQL volume.
 
 ## Target outcome
 
@@ -63,18 +63,16 @@ docker compose down || true        # if there's a compose project, tear it down
 # 2. Move the old broken deploy script aside (don't delete yet — we may want to read it).
 mv ~/deploy_BoTC.sh ~/deploy_BoTC.sh.bak 2>/dev/null || true
 
-# 3. Choose a fixed deploy path. The plan uses ~/BoTC.
+# 3. Create the deploy directory. Only compose files and .env live here — no repo clone.
 mkdir -p ~/BoTC
-cd ~/BoTC
 
-# 4. Clone the repo here (if not already). Use HTTPS — the VPS does not need push rights.
-git clone https://github.com/jAjiz/BoTC.git . || git pull --ff-only
-
-# 5. Place the production .env file at ~/BoTC/.env.
+# 4. Place the production .env file at ~/BoTC/.env.
 #    Use whatever channel you trust (scp, paste from password manager, etc.).
 #    Required keys: KRAKEN_API_KEY, KRAKEN_API_SECRET, TELEGRAM_BOT_TOKEN,
 #    TELEGRAM_CHAT_ID, POSTGRES_PASSWORD, plus any others currently in use.
 ls -la ~/BoTC/.env                 # must exist and be readable by the deploy user
+
+# 5. Copy legacy CSV and JSON data files to the VPS (one-time, for Step 6 data migration).
 
 # 6. Verify Docker + Compose plugin are installed.
 docker --version
@@ -333,25 +331,29 @@ Implementation notes:
           host: ${{ secrets.VM_IP }}
           username: ${{ secrets.VM_USER }}
           key: ${{ secrets.VM_KEY }}
-          envs: DEPLOY_PATH,IMAGE_TAG
+          envs: DEPLOY_PATH,IMAGE_TAG,COMMIT_SHA
           script_stop: true
           script: |
             set -euo pipefail
+            mkdir -p "$DEPLOY_PATH"
+            curl -fsSL "https://raw.githubusercontent.com/jAjiz/BoTC/${COMMIT_SHA}/docker-compose.yml" \
+              -o "$DEPLOY_PATH/docker-compose.yml"
+            curl -fsSL "https://raw.githubusercontent.com/jAjiz/BoTC/${COMMIT_SHA}/docker-compose.prod.yml" \
+              -o "$DEPLOY_PATH/docker-compose.prod.yml"
             cd "$DEPLOY_PATH"
-            git fetch origin main
-            git reset --hard origin/main
             docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
             docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --remove-orphans
             docker image prune -f
         env:
           DEPLOY_PATH: ${{ secrets.VM_DEPLOY_PATH }}
           IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
+          COMMIT_SHA: ${{ github.sha }}
 ```
 
 Implementation notes:
 - `script_stop: true` makes the SSH script abort on the first failing command (combined with `set -euo pipefail` for redundancy — both are intentional).
-- `git reset --hard origin/main` is destructive on purpose. The VPS clone is a deploy mirror, not a development checkout. If the deploy user has accidentally edited a file, those edits are lost — that is the correct behaviour.
-- `IMAGE_TAG` is currently passed but not consumed by the script (the compose file defaults to `:main`). It is included so a manual rollback step can `IMAGE_TAG=sha-abc1234` without changing the workflow. Documented in Step 5 below.
+- `COMMIT_SHA` pins the curl fetch to the exact commit being deployed, not the moving `main` ref. This means the compose files on the VPS always match the image being pulled.
+- `IMAGE_TAG` is passed but not consumed by the script (the compose file defaults to `:main`). It is included so a manual rollback step can `IMAGE_TAG=sha-abc1234` without changing the workflow. Documented in Step 5 below.
 - `docker image prune -f` cleans up the previously-deployed image. Running daily on the VPS would be tidier, but adding it here keeps the cleanup tied to the deploy lifecycle.
 
 **Commit:** `ci(workflows): add unified ci.yml with lint, unit, integration, build, and deploy`.
@@ -400,7 +402,7 @@ A single workflow (`.github/workflows/ci.yml`) runs on every PR and every push t
 | `Unit tests` | always | `pytest tests/unit` with the 80% coverage gate |
 | `Integration tests` | always | `pytest tests/integration` against an ephemeral Postgres service (Kraken-gated tests are skipped in CI) |
 | `Build and push image` | `push: main` only | Builds the production image and publishes it to `ghcr.io/jajiz/botc:main` and `ghcr.io/jajiz/botc:sha-<short>` |
-| `Deploy to VPS` | `push: main` only | SSHes to the VPS, fast-forwards the deploy clone, and runs `docker compose pull && up -d` |
+| `Deploy to VPS` | `push: main` only | SSHes to the VPS, fetches the two compose files by commit SHA, and runs `docker compose pull && up -d` |
 
 The `needs:` chain in the workflow file enforces ordering: a failing lint/test job blocks the image push and the deploy. Branch protection on `main` is optional — the pipeline gate is the workflow's job graph, not the branch rule.
 
@@ -474,12 +476,35 @@ After the merged Phase 7 commit triggers the first full pipeline run and the dep
 1. **Verify the package was created**: https://github.com/jAjiz?tab=packages should now show `botc`.
 2. **Make the package public** (Step 0.3 — once-only).
 3. **If the deploy job failed because the package was private at first deploy time**, re-run the failed `deploy` job from the Actions tab (Re-run failed jobs). It will succeed once the package is public.
-4. **Confirm the bot is healthy**:
+4. **Run the legacy data migration** (one-time — imports CSV/JSON into PostgreSQL):
+
+   The production image contains `scripts/load_legacy_data.py` and `core.database`. Use `docker compose run` so the container shares the running network and can reach the `postgres` service by hostname.
+
+   ```bash
+   # On the VPS
+   cd ~/BoTC
+   docker compose -f docker-compose.yml -f docker-compose.prod.yml run --rm \
+     -v ~/data:/app/data \
+     botc \
+     python scripts/load_legacy_data.py --data-dir /app/data --yes
+   ```
+
+   Expected output: one log line per CSV file processed, then a `trailing_state.json` line, then `Import complete. Total rows/entries processed: N`.
+
+   After a successful run, remove the data files — they are now in PostgreSQL and are no longer needed on the VPS:
+
+   ```bash
+   rm -rf ~/data
+   ```
+
+   If the import fails, the `--dry-run` flag lets you inspect what would be loaded without writing to the database. Fix any issue (wrong path, bad env, unreachable postgres) and re-run; the upsert logic is idempotent for `ohlc_data`.
+
+5. **Confirm the bot is healthy**:
    - `curl http://localhost:8000/health` from the VPS returns 200
    - `curl http://localhost:8000/status` shows `last_run_at` advancing across two consecutive calls 60 seconds apart
    - `/status` over Telegram returns the same data (proves the telegram service is reaching the bot)
-5. **Delete the old script backup**: `rm ~/deploy_BoTC.sh.bak`.
-6. **Move on to Phase 8 by committing directly to `main`.** The pipeline is now the gate; no feature branch needed unless the change is large enough to warrant review.
+6. **Delete the old script backup**: `rm ~/deploy_BoTC.sh.bak`.
+7. **Move on to Phase 8 by committing directly to `main`.** The pipeline is now the gate; no feature branch needed unless the change is large enough to warrant review.
 
 ---
 
