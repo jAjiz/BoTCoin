@@ -1,11 +1,15 @@
+import asyncio
 from datetime import UTC, datetime
+from unittest.mock import MagicMock
 
-from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+import pytest
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
+import api.app as api_app
 import core.database as db
 import core.runtime as runtime
+from api.app import health, lifespan, verify_token
 from api.routes import balance, control, market, positions, status
 
 _PAIRS = {"XBTEUR": {}, "ETHEUR": {}}
@@ -39,6 +43,82 @@ def _control_state(monkeypatch, initial_paused=False):
     app = FastAPI()
     app.include_router(control.router)
     return TestClient(app), state
+
+
+# ============================================================================
+# Health
+# ============================================================================
+
+
+def test_health_returns_ok():
+    assert health() == {"ok": True}
+
+
+# ============================================================================
+# Token verification
+# ============================================================================
+
+
+def test_verify_token_no_secret_configured(monkeypatch):
+    monkeypatch.setattr(api_app, "API_SECRET_TOKEN", None)
+    verify_token(None)  # must not raise
+
+
+@pytest.mark.parametrize("token", [None, "wrong-token"])
+def test_verify_token_invalid_raises_401(monkeypatch, token):
+    monkeypatch.setattr(api_app, "API_SECRET_TOKEN", "correct-secret")
+    with pytest.raises(HTTPException) as exc_info:
+        verify_token(token)
+    assert exc_info.value.status_code == 401
+
+
+def test_verify_token_correct_passes(monkeypatch):
+    monkeypatch.setattr(api_app, "API_SECRET_TOKEN", "correct-secret")
+    verify_token("correct-secret")  # must not raise
+
+
+# ============================================================================
+# Lifespan
+# ============================================================================
+
+
+def test_lifespan_validate_config_fails(monkeypatch):
+    monkeypatch.setattr(api_app, "validate_config", lambda: False)
+
+    async def _run():
+        async with lifespan(None):
+            pass
+
+    with pytest.raises(RuntimeError, match="Configuration validation failed"):
+        asyncio.run(_run())
+
+
+def test_lifespan_db_connection_fails(monkeypatch):
+    monkeypatch.setattr(api_app, "validate_config", lambda: True)
+    monkeypatch.setattr(api_app.db, "check_database_connection", lambda: False)
+
+    async def _run():
+        async with lifespan(None):
+            pass
+
+    with pytest.raises(RuntimeError, match="Cannot connect to PostgreSQL"):
+        asyncio.run(_run())
+
+
+def test_lifespan_success_starts_and_stops_scheduler(monkeypatch):
+    monkeypatch.setattr(api_app, "validate_config", lambda: True)
+    monkeypatch.setattr(api_app.db, "check_database_connection", lambda: True)
+
+    mock_scheduler = MagicMock()
+    monkeypatch.setattr(api_app, "AsyncIOScheduler", lambda **kwargs: mock_scheduler)
+
+    async def _run():
+        async with lifespan(None):
+            pass
+
+    asyncio.run(_run())
+    mock_scheduler.start.assert_called_once()
+    mock_scheduler.shutdown.assert_called_once_with(wait=True)
 
 
 # ============================================================================
@@ -149,10 +229,7 @@ def test_get_position_unknown_pair_returns_404(monkeypatch):
 
 def test_unhandled_exception_returns_500():
     app = FastAPI()
-
-    @app.exception_handler(Exception)
-    async def _unhandled(request, exc):
-        return JSONResponse(status_code=500, content={"detail": "internal error"})
+    app.add_exception_handler(Exception, api_app._unhandled)
 
     @app.get("/boom")
     def boom():
