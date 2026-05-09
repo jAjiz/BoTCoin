@@ -163,9 +163,7 @@ def tick_position(
             logging.info(f"♻️ Recalibrate {side.upper()} position: activation price to {pos['activation_price']:,}€.")
 
         if reanchor_activation_price(pair, pos, current_price):
-            logging.info(
-                f"🧭 Re-anchor {side.upper()} position: activation price to {pos['activation_price']:,}€."
-            )
+            logging.info(f"🧭 Re-anchor {side.upper()} position: activation price to {pos['activation_price']:,}€.")
 
         if (side == "sell" and current_price >= pos["activation_price"]) or (
             side == "buy" and current_price <= pos["activation_price"]

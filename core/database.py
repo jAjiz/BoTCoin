@@ -1,3 +1,4 @@
+import logging as stdlib_logging
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -24,7 +25,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 from sqlalchemy.pool import QueuePool
-import logging as stdlib_logging
+
 from core.config import (
     POSTGRES_DB,
     POSTGRES_HOST,

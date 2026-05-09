@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging as stdlib_logging
 import os
 import re
 import sys
@@ -27,7 +28,6 @@ from typing import Any
 
 import pandas as pd
 
-import logging as stdlib_logging
 from core.database import check_database_connection, save_ohlc_data, save_trailing_state
 
 logger = stdlib_logging.getLogger("load_legacy_data")
