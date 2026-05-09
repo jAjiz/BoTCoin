@@ -332,7 +332,6 @@ Implementation notes:
           username: ${{ secrets.VM_USER }}
           key: ${{ secrets.VM_KEY }}
           envs: DEPLOY_PATH,IMAGE_TAG,COMMIT_SHA
-          script_stop: true
           script: |
             set -euo pipefail
             mkdir -p "$DEPLOY_PATH"
@@ -351,7 +350,6 @@ Implementation notes:
 ```
 
 Implementation notes:
-- `script_stop: true` makes the SSH script abort on the first failing command (combined with `set -euo pipefail` for redundancy — both are intentional).
 - `COMMIT_SHA` pins the curl fetch to the exact commit being deployed, not the moving `main` ref. This means the compose files on the VPS always match the image being pulled.
 - `IMAGE_TAG` is passed but not consumed by the script (the compose file defaults to `:main`). It is included so a manual rollback step can `IMAGE_TAG=sha-abc1234` without changing the workflow. Documented in Step 5 below.
 - `docker image prune -f` cleans up the previously-deployed image. Running daily on the VPS would be tidier, but adding it here keeps the cleanup tied to the deploy lifecycle.
