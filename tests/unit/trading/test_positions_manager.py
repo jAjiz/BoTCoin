@@ -5,7 +5,6 @@ import pytest
 
 import trading.positions_manager as positions_manager
 
-
 # ============================================================================
 # Activation price
 # ============================================================================
