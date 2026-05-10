@@ -1,3 +1,4 @@
+import secrets
 from contextlib import asynccontextmanager
 from datetime import datetime
 
@@ -11,7 +12,7 @@ from fastapi.security import APIKeyHeader
 import core.database as db
 import core.logging as logging
 from api.routes import balance, control, market, positions, status
-from core.config import API_SECRET_TOKEN, SLEEPING_INTERVAL
+from core.config import ALLOW_NO_AUTH, API_SECRET_TOKEN, SLEEPING_INTERVAL
 from core.scheduler import trading_session
 from core.validation import validate_config
 
@@ -22,8 +23,12 @@ _api_key_header = APIKeyHeader(name="X-Api-Token", auto_error=False)
 
 def verify_token(x_api_token: str | None = Security(_api_key_header)) -> None:
     if not API_SECRET_TOKEN:
-        return
-    if x_api_token != API_SECRET_TOKEN:
+        if ALLOW_NO_AUTH:
+            return
+        # Defense-in-depth: validate_config should have already failed startup,
+        # but if the app somehow boots without a token, refuse every request.
+        raise HTTPException(status_code=401, detail="API auth not configured")
+    if x_api_token is None or not secrets.compare_digest(x_api_token, API_SECRET_TOKEN):
         raise HTTPException(status_code=401, detail="Invalid or missing API token")
 
 

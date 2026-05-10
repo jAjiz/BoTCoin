@@ -422,19 +422,51 @@ A single workflow (`.github/workflows/ci.yml`) runs on every PR and every push t
 
 | Job | When | What |
 |---|---|---|
-| `Lint (ruff)` | always | `ruff check` + `ruff format --check` inside the dev image |
-| `Unit tests` | always | `pytest tests/unit` with the 80% coverage gate |
-| `Integration tests` | always | `pytest tests/integration` against an ephemeral Postgres service (Kraken-gated tests are skipped in CI) |
+| `Lint, unit and integration tests` | always | Builds the dev image once, then runs `ruff check`, `ruff format --check`, `pytest tests/unit` (with the 80% coverage gate), and `pytest tests/integration` against an ephemeral Postgres service. Kraken-gated tests are skipped in CI. |
 | `Build and push image` | `push: main` only | Builds the production image and publishes it to `ghcr.io/jajiz/botc:main` and `ghcr.io/jajiz/botc:sha-<short>` |
 | `Deploy to VPS` | `push: main` only | SSHes to the VPS, fetches the two compose files by commit SHA, and runs `docker compose pull && up -d` |
 
-The `needs:` chain in the workflow file enforces ordering: a failing lint/test job blocks the image push and the deploy. Branch protection on `main` is optional — the pipeline gate is the workflow's job graph, not the branch rule.
+The `needs:` chain in the workflow file enforces ordering: a failing test job blocks the image push and the deploy. Branch protection on `main` is optional — the pipeline gate is the workflow's job graph, not the branch rule.
 
-To roll back to a previous image without reverting the commit:
+#### Rolling back to a previous image with `IMAGE_TAG`
 
-    # On the VPS
-    cd ~/BoTC
-    IMAGE_TAG=sha-abc1234 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+Every successful `push: main` build is tagged twice on GHCR:
+
+- `ghcr.io/jajiz/botc:main` — the moving tag, what `docker compose pull` resolves to by default.
+- `ghcr.io/jajiz/botc:sha-<short>` — an immutable tag pinned to the commit SHA. This is the rollback target.
+
+`docker-compose.prod.yml` reads the tag from the `IMAGE_TAG` environment variable and defaults to `main`. To roll back without reverting the commit on `main`:
+
+```bash
+# On the VPS, in the deploy directory containing the two compose files:
+cd "$DEPLOY_PATH"
+
+# 1. Identify the last known-good build. Either:
+#      - pick the SHA from a previous successful "Deploy to VPS" run on GitHub Actions, or
+#      - list locally available tags:
+docker image ls ghcr.io/jajiz/botc
+
+# 2. Pin IMAGE_TAG to that SHA and bring the stack up. Persist the value
+#    in the shell session so subsequent compose commands keep using it.
+export IMAGE_TAG=sha-abc1234
+docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --remove-orphans
+
+# 3. Verify both services are healthy.
+docker compose -f docker-compose.yml -f docker-compose.prod.yml ps
+curl -fsS http://127.0.0.1:8000/health
+
+# 4. To return to the latest main once the underlying issue is fixed:
+unset IMAGE_TAG
+docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --remove-orphans
+```
+
+Notes:
+
+- The rollback is service-only. Database state is **not** rewound — if the bad release applied an Alembic migration, run the matching `alembic downgrade` before rolling back the image, otherwise the older image may not understand the new schema.
+- `IMAGE_TAG` is read at compose evaluation time, so set it in the same shell that runs `docker compose ... up`, or place it in a `.env` file next to the compose files for persistence across SSH sessions.
+- To make the rollback durable across reboots, keep `IMAGE_TAG=sha-<short>` in `.env` until you are ready to roll forward.
 
 ### Configuration Validation & Logging
 

@@ -1,6 +1,8 @@
 import logging
 
 from core.config import (
+    ALLOW_NO_AUTH,
+    API_SECRET_TOKEN,
     ATR_DESV_LIMIT,
     ATR_PERIOD,
     CANDLE_TIMEFRAME,
@@ -32,6 +34,13 @@ def validate_common_params(errors: list[str]) -> None:
             errors.append("TELEGRAM_USER_ID must be a positive integer")
         if TELEGRAM_POLL_INTERVAL < 0:
             errors.append("TELEGRAM_POLL_INTERVAL must be a non-negative integer")
+
+    # API auth: refuse to start with no token unless explicit opt-in.
+    if not API_SECRET_TOKEN and not ALLOW_NO_AUTH:
+        errors.append(
+            "API_SECRET_TOKEN is missing. Set it, or set ALLOW_NO_AUTH=true "
+            "to explicitly run the API without authentication."
+        )
 
     # Bot settings
     if SLEEPING_INTERVAL <= 0:

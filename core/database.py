@@ -117,10 +117,10 @@ class OHLCData(Base):
             "high": float(self.high),
             "low": float(self.low),
             "close": float(self.close),
-            "vwap": float(self.vwap) if self.vwap else None,
-            "volume": float(self.volume) if self.volume else None,
+            "vwap": float(self.vwap) if self.vwap is not None else None,
+            "volume": float(self.volume) if self.volume is not None else None,
             "count": self.count,
-            "atr": float(self.atr) if self.atr else None,
+            "atr": float(self.atr) if self.atr is not None else None,
         }
 
 
@@ -163,13 +163,13 @@ class ClosedPosition(Base):
             "side": self.side,
             "volume": float(self.volume),
             "entry_price": float(self.entry_price),
-            "activation_atr": float(self.activation_atr) if self.activation_atr else None,
-            "activation_price": float(self.activation_price) if self.activation_price else None,
+            "activation_atr": float(self.activation_atr) if self.activation_atr is not None else None,
+            "activation_price": float(self.activation_price) if self.activation_price is not None else None,
             "created_at": self.created_at,
             "activated_at": self.activated_at,
-            "trailing_price": float(self.trailing_price) if self.trailing_price else None,
-            "stop_price": float(self.stop_price) if self.stop_price else None,
-            "stop_atr": float(self.stop_atr) if self.stop_atr else None,
+            "trailing_price": float(self.trailing_price) if self.trailing_price is not None else None,
+            "stop_price": float(self.stop_price) if self.stop_price is not None else None,
+            "stop_atr": float(self.stop_atr) if self.stop_atr is not None else None,
             "closing_price": float(self.closing_price),
             "closing_order_id": self.closing_order_id,
             "closed_at": self.closed_at,
@@ -225,11 +225,11 @@ class TrailingState(Base):
             "activation_price": float(self.activation_price),
             "created_at": self.created_at,
             "activated_at": self.activated_at,
-            "trailing_price": float(self.trailing_price) if self.trailing_price else None,
-            "stop_price": float(self.stop_price) if self.stop_price else None,
-            "stop_atr": float(self.stop_atr) if self.stop_atr else None,
+            "trailing_price": float(self.trailing_price) if self.trailing_price is not None else None,
+            "stop_price": float(self.stop_price) if self.stop_price is not None else None,
+            "stop_atr": float(self.stop_atr) if self.stop_atr is not None else None,
             "closing_order_id": self.closing_order_id,
-            "closing_price": float(self.closing_price) if self.closing_price else None,
+            "closing_price": float(self.closing_price) if self.closing_price is not None else None,
             "closing_requested_at": self.closing_requested_at,
             "updated_at": self.updated_at,
         }
@@ -400,21 +400,22 @@ def save_ohlc_data(pair: str, timeframe: int, df: pd.DataFrame) -> None:
         if df.empty:
             logger.warning(f"Empty DataFrame provided for {pair}")
             return
+        records = df.to_dict("records")
         rows = [
             {
                 "pair": pair,
                 "timeframe_minutes": timeframe,
-                "time": int(row["time"]),
-                "open": _to_decimal_required(row["open"]),
-                "high": _to_decimal_required(row["high"]),
-                "low": _to_decimal_required(row["low"]),
-                "close": _to_decimal_required(row["close"]),
-                "vwap": Decimal(str(row["vwap"])) if "vwap" in row and pd.notna(row["vwap"]) else None,
-                "volume": Decimal(str(row["volume"])) if "volume" in row and pd.notna(row["volume"]) else None,
-                "count": int(row["count"]) if "count" in row and pd.notna(row["count"]) else None,
-                "atr": Decimal(str(row["atr"])) if "atr" in row and pd.notna(row["atr"]) else None,
+                "time": int(r["time"]),
+                "open": _to_decimal_required(r["open"]),
+                "high": _to_decimal_required(r["high"]),
+                "low": _to_decimal_required(r["low"]),
+                "close": _to_decimal_required(r["close"]),
+                "vwap": Decimal(str(r["vwap"])) if "vwap" in r and pd.notna(r["vwap"]) else None,
+                "volume": Decimal(str(r["volume"])) if "volume" in r and pd.notna(r["volume"]) else None,
+                "count": int(r["count"]) if "count" in r and pd.notna(r["count"]) else None,
+                "atr": Decimal(str(r["atr"])) if "atr" in r and pd.notna(r["atr"]) else None,
             }
-            for _, row in df.iterrows()
+            for r in records
         ]
         with get_session() as session:
             stmt = (
@@ -611,11 +612,14 @@ def set_control_value(control_key: str, control_value: str, updated_by: str | No
 
 
 def get_bot_paused() -> bool:
-    """Get bot paused state from bot_control table."""
+    """Get bot paused state from bot_control table.
+
+    Defaults to True (paused) when the row is missing or the value cannot be
+    read."""
     value = get_control_value("bot_paused")
     if value is None:
-        logger.warning("bot_paused record missing from bot_control table; defaulting to False")
-        return False
+        logger.warning("bot_paused record missing from bot_control table; defaulting to True (paused)")
+        return True
     return str(value).strip().lower() == "true"
 
 

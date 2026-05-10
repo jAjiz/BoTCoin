@@ -59,9 +59,18 @@ def test_health_returns_ok():
 # ============================================================================
 
 
-def test_verify_token_no_secret_configured(monkeypatch):
+def test_verify_token_no_secret_with_explicit_opt_in(monkeypatch):
     monkeypatch.setattr(api_app, "API_SECRET_TOKEN", None)
-    verify_token(None)  # must not raise
+    monkeypatch.setattr(api_app, "ALLOW_NO_AUTH", True)
+    verify_token(None)  # must not raise when auth is explicitly disabled
+
+
+def test_verify_token_no_secret_without_opt_in_raises_401(monkeypatch):
+    monkeypatch.setattr(api_app, "API_SECRET_TOKEN", None)
+    monkeypatch.setattr(api_app, "ALLOW_NO_AUTH", False)
+    with pytest.raises(HTTPException) as exc_info:
+        verify_token("anything")
+    assert exc_info.value.status_code == 401
 
 
 @pytest.mark.parametrize("token", [None, "wrong-token"])
@@ -75,6 +84,47 @@ def test_verify_token_invalid_raises_401(monkeypatch, token):
 def test_verify_token_correct_passes(monkeypatch):
     monkeypatch.setattr(api_app, "API_SECRET_TOKEN", "correct-secret")
     verify_token("correct-secret")  # must not raise
+
+
+# ============================================================================
+# End-to-end auth dependency on the full app
+# ============================================================================
+
+
+def test_full_app_rejects_request_without_token(monkeypatch):
+    """Routers mounted on api_app.app must enforce verify_token via _auth dep."""
+    monkeypatch.setattr(api_app, "API_SECRET_TOKEN", "secret-xyz")
+    client = TestClient(api_app.app)
+    for path in ("/balance", "/status", "/market", "/positions"):
+        resp = client.get(path)
+        assert resp.status_code == 401, f"{path} did not require auth"
+    resp = client.post("/control/pause")
+    assert resp.status_code == 401
+
+
+def test_full_app_accepts_request_with_valid_token(monkeypatch):
+    monkeypatch.setattr(api_app, "API_SECRET_TOKEN", "secret-xyz")
+    monkeypatch.setattr(runtime, "get_last_balance", lambda: {"ZEUR": 100.0})
+    client = TestClient(api_app.app)
+    resp = client.get("/balance", headers={"X-Api-Token": "secret-xyz"})
+    assert resp.status_code == 200
+    assert resp.json() == {"balance": {"ZEUR": 100.0}}
+
+
+def test_full_app_rejects_request_with_wrong_token(monkeypatch):
+    monkeypatch.setattr(api_app, "API_SECRET_TOKEN", "secret-xyz")
+    client = TestClient(api_app.app)
+    resp = client.get("/balance", headers={"X-Api-Token": "not-the-secret"})
+    assert resp.status_code == 401
+
+
+def test_full_app_health_endpoint_is_unauthenticated(monkeypatch):
+    """/health must remain reachable without a token for container healthchecks."""
+    monkeypatch.setattr(api_app, "API_SECRET_TOKEN", "secret-xyz")
+    client = TestClient(api_app.app)
+    resp = client.get("/health")
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True}
 
 
 # ============================================================================

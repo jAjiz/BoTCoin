@@ -24,6 +24,8 @@ POSTGRES_PORT = os.getenv("POSTGRES_PORT", "5432")
 
 # API settings
 API_SECRET_TOKEN = os.getenv("API_SECRET_TOKEN")
+# Explicit opt-in to run without API auth. Use with caution.
+ALLOW_NO_AUTH = os.getenv("ALLOW_NO_AUTH", "false").lower() == "true"
 
 # Bot Settings
 SLEEPING_INTERVAL = int(os.getenv("SLEEPING_INTERVAL", 60))  # 1 minute

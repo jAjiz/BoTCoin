@@ -223,12 +223,13 @@ async def test_all_commands_reject_unauthorized_users(monkeypatch) -> None:
 # ============================================================================
 
 
-def _notify_client(monkeypatch):
+def _notify_client(monkeypatch, *, token: str | None = None, allow_no_auth: bool = True):
     mock_tg = MagicMock()
     mock_tg.bot.send_message = AsyncMock()
     monkeypatch.setattr(tg_module, "tg_app", mock_tg)
     monkeypatch.setattr(tg_module, "TELEGRAM_USER_ID", "123456789")
-    monkeypatch.setattr(tg_module, "API_SECRET_TOKEN", None)
+    monkeypatch.setattr(tg_module, "API_SECRET_TOKEN", token)
+    monkeypatch.setattr(tg_module, "ALLOW_NO_AUTH", allow_no_auth)
     app = FastAPI()
     app.add_api_route("/notify", tg_module.notify, methods=["POST"], status_code=202)
     return TestClient(app), mock_tg
@@ -247,3 +248,33 @@ def test_notify_tolerates_send_failure(monkeypatch):
     client, mock_tg = _notify_client(monkeypatch)
     mock_tg.bot.send_message.side_effect = RuntimeError("network error")
     assert client.post("/notify", json={"message": "test", "level": "info"}).status_code == 202
+
+
+def test_notify_rejects_request_without_token(monkeypatch):
+    client, _ = _notify_client(monkeypatch, token="secret-xyz", allow_no_auth=False)
+    assert client.post("/notify", json={"message": "x", "level": "info"}).status_code == 401
+
+
+def test_notify_rejects_request_with_wrong_token(monkeypatch):
+    client, _ = _notify_client(monkeypatch, token="secret-xyz", allow_no_auth=False)
+    resp = client.post(
+        "/notify",
+        json={"message": "x", "level": "info"},
+        headers={"X-Api-Token": "wrong"},
+    )
+    assert resp.status_code == 401
+
+
+def test_notify_accepts_request_with_correct_token(monkeypatch):
+    client, _ = _notify_client(monkeypatch, token="secret-xyz", allow_no_auth=False)
+    resp = client.post(
+        "/notify",
+        json={"message": "x", "level": "info"},
+        headers={"X-Api-Token": "secret-xyz"},
+    )
+    assert resp.status_code == 202
+
+
+def test_notify_rejects_when_no_token_and_no_opt_in(monkeypatch):
+    client, _ = _notify_client(monkeypatch, token=None, allow_no_auth=False)
+    assert client.post("/notify", json={"message": "x", "level": "info"}).status_code == 401

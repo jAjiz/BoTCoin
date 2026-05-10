@@ -13,15 +13,15 @@ permissions:
   contents: read
 
 jobs:
-  lint:
-    name: Lint (ruff)
+  test:
+    name: Lint, unit and integration tests
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6.0.2 # v6.0.2
 
       - name: Build dev image
-        run: docker compose -f docker-compose.test.yml build
+        run: docker compose -f docker-compose.test.yml build test
 
       - name: ruff check
         run: docker compose -f docker-compose.test.yml run --rm test ruff check .
@@ -29,28 +29,8 @@ jobs:
       - name: ruff format --check
         run: docker compose -f docker-compose.test.yml run --rm test ruff format --check .
 
-  unit:
-    name: Unit tests
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6.0.2 # v6.0.2
-
-      - name: Build dev image
-        run: docker compose -f docker-compose.test.yml build
-
       - name: Run unit tests
         run: docker compose -f docker-compose.test.yml run --rm test pytest tests/unit
-
-  integration:
-    name: Integration tests
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6.0.2 # v6.0.2
-
-      - name: Build dev image
-        run: docker compose -f docker-compose.test.yml build
 
       - name: Start postgres
         run: docker compose -f docker-compose.test.yml up -d --wait postgres
@@ -74,7 +54,7 @@ jobs:
 
   build-and-push:
     name: Build and push image
-    needs: [lint, unit, integration]
+    needs: [test]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
