@@ -165,7 +165,11 @@ def load_closed_positions(path: str, dry_run: bool = False) -> int:
     stmt = pg_insert(ClosedPosition.__table__).values(rows).on_conflict_do_nothing(index_elements=["closing_order_id"])
     with get_session() as session:
         result = session.execute(stmt)
-    inserted = result.rowcount if result.rowcount is not None else len(rows)
+    if result.rowcount < 0:
+        # PostgreSQL does not report per-row counts for bulk ON CONFLICT DO NOTHING.
+        logger.info("Upserted %d closed positions (exact insert/skip counts unavailable)", len(rows))
+        return len(rows)
+    inserted = result.rowcount
     logger.info("Inserted %d new closed positions (skipped %d duplicates)", inserted, len(rows) - inserted)
     return inserted
 
