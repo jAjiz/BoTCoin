@@ -60,6 +60,7 @@ def test_validate_config_returns_false_on_errors(monkeypatch) -> None:
 def test_validate_config_returns_true_on_success(monkeypatch) -> None:
     monkeypatch.setattr(validation, "validate_common_params", lambda errors: None)
     monkeypatch.setattr(validation, "build_and_validate_pairs", lambda errors: None)
+    monkeypatch.setattr(validation, "validate_pair_params", lambda errors: None)
 
     called = {"summary": False}
 
@@ -70,3 +71,140 @@ def test_validate_config_returns_true_on_success(monkeypatch) -> None:
 
     assert validation.validate_config() is True
     assert called["summary"] is True
+
+
+# ============================================================================
+# validate_pair_params
+# ============================================================================
+
+
+def _stub_pair_config(
+    monkeypatch,
+    pair="XBTEUR",
+    *,
+    trading=None,
+    allocation=None,
+    stops=None,
+):
+    """Replace the module-level config that validate_pair_params reads/writes."""
+    monkeypatch.setattr(validation, "PAIRS", {pair: {}})
+    monkeypatch.setattr(validation, "VOLATILITY_LEVELS", ("LL", "LV", "MV", "HV", "HH"))
+    default_trading = {"sell": {"K_ACT": "1.2", "MIN_MARGIN": "0"}, "buy": {"K_ACT": "1.2", "MIN_MARGIN": "0"}}
+    default_allocation = {"TARGET_PCT": "50", "HODL_PCT": "25"}
+    default_stops = {lvl: "0.9" for lvl in ("LL", "LV", "MV", "HV", "HH")}
+    monkeypatch.setattr(validation, "TRADING_PARAMS", {pair: trading or default_trading})
+    monkeypatch.setattr(validation, "ASSET_ALLOCATION", {pair: allocation or default_allocation})
+    monkeypatch.setattr(validation, "STOP_PERCENTILES", {pair: stops or default_stops})
+
+
+def test_validate_pair_params_happy_path_normalizes_values(monkeypatch) -> None:
+    _stub_pair_config(monkeypatch)
+    errors = []
+    validation.validate_pair_params(errors)
+
+    assert errors == []
+    assert validation.TRADING_PARAMS["XBTEUR"]["sell"]["K_ACT"] == 1.2
+    assert validation.TRADING_PARAMS["XBTEUR"]["sell"]["MIN_MARGIN"] == 0.0
+    assert validation.ASSET_ALLOCATION["XBTEUR"]["TARGET_PCT"] == 50.0
+    assert validation.ASSET_ALLOCATION["XBTEUR"]["HODL_PCT"] == 25.0
+    assert validation.STOP_PERCENTILES["XBTEUR"]["LL"] == 0.9
+
+
+def test_validate_pair_params_empty_k_act_becomes_none_and_min_margin_required(monkeypatch) -> None:
+    _stub_pair_config(
+        monkeypatch,
+        trading={
+            "sell": {"K_ACT": "", "MIN_MARGIN": "0.5"},
+            "buy": {"K_ACT": None, "MIN_MARGIN": ""},
+        },
+    )
+    errors = []
+    validation.validate_pair_params(errors)
+
+    assert validation.TRADING_PARAMS["XBTEUR"]["sell"]["K_ACT"] is None
+    assert validation.TRADING_PARAMS["XBTEUR"]["sell"]["MIN_MARGIN"] == 0.5
+    # buy side: K_ACT unset AND MIN_MARGIN unset → error.
+    assert any("XBTEUR_BUY_MIN_MARGIN is required" in e for e in errors)
+
+
+def test_validate_pair_params_invalid_k_act_flagged(monkeypatch) -> None:
+    _stub_pair_config(
+        monkeypatch,
+        trading={
+            "sell": {"K_ACT": "not-a-number", "MIN_MARGIN": "0"},
+            "buy": {"K_ACT": "1.0", "MIN_MARGIN": "0"},
+        },
+    )
+    errors = []
+    validation.validate_pair_params(errors)
+    assert any("XBTEUR_SELL_K_ACT must be a float" in e for e in errors)
+
+
+def test_validate_pair_params_min_margin_unused_when_k_act_defined(monkeypatch) -> None:
+    _stub_pair_config(
+        monkeypatch,
+        trading={
+            "sell": {"K_ACT": "1.5", "MIN_MARGIN": ""},
+            "buy": {"K_ACT": "1.5", "MIN_MARGIN": None},
+        },
+    )
+    errors = []
+    validation.validate_pair_params(errors)
+    # No error: MIN_MARGIN unused when K_ACT is defined. Normalized to 0.
+    assert errors == []
+    assert validation.TRADING_PARAMS["XBTEUR"]["sell"]["MIN_MARGIN"] == 0.0
+    assert validation.TRADING_PARAMS["XBTEUR"]["buy"]["MIN_MARGIN"] == 0.0
+
+
+def test_validate_pair_params_target_pct_over_100_flagged(monkeypatch) -> None:
+    _stub_pair_config(monkeypatch, allocation={"TARGET_PCT": "120", "HODL_PCT": "10"})
+    errors = []
+    validation.validate_pair_params(errors)
+    assert any("XBTEUR_TARGET_PCT must be <= 100" in e for e in errors)
+
+
+def test_validate_pair_params_hodl_pct_over_100_flagged(monkeypatch) -> None:
+    _stub_pair_config(monkeypatch, allocation={"TARGET_PCT": "50", "HODL_PCT": "150"})
+    errors = []
+    validation.validate_pair_params(errors)
+    assert any("XBTEUR_HODL_PCT must be <= 100" in e for e in errors)
+
+
+def test_validate_pair_params_target_pct_sum_over_100_flagged(monkeypatch) -> None:
+    monkeypatch.setattr(validation, "PAIRS", {"XBTEUR": {}, "ETHEUR": {}})
+    monkeypatch.setattr(validation, "VOLATILITY_LEVELS", ("LL", "LV", "MV", "HV", "HH"))
+    trading = {"sell": {"K_ACT": "1.2", "MIN_MARGIN": "0"}, "buy": {"K_ACT": "1.2", "MIN_MARGIN": "0"}}
+    stops = {lvl: "0.9" for lvl in ("LL", "LV", "MV", "HV", "HH")}
+    monkeypatch.setattr(validation, "TRADING_PARAMS", {"XBTEUR": trading, "ETHEUR": trading})
+    monkeypatch.setattr(
+        validation,
+        "ASSET_ALLOCATION",
+        {
+            "XBTEUR": {"TARGET_PCT": "60", "HODL_PCT": "10"},
+            "ETHEUR": {"TARGET_PCT": "60", "HODL_PCT": "10"},
+        },
+    )
+    monkeypatch.setattr(validation, "STOP_PERCENTILES", {"XBTEUR": stops, "ETHEUR": stops})
+
+    errors = []
+    validation.validate_pair_params(errors)
+    assert any("Sum of TARGET_PCT across all pairs must not exceed 100" in e for e in errors)
+
+
+def test_validate_pair_params_stop_pct_out_of_range_flagged(monkeypatch) -> None:
+    stops = {lvl: "0.9" for lvl in ("LL", "LV", "MV", "HV", "HH")}
+    stops["HH"] = "1.5"
+    _stub_pair_config(monkeypatch, stops=stops)
+    errors = []
+    validation.validate_pair_params(errors)
+    assert any("XBTEUR_STOP_PCT_HH must be <= 1" in e for e in errors)
+
+
+def test_validate_pair_params_stop_pct_empty_uses_default(monkeypatch) -> None:
+    stops = {lvl: "" for lvl in ("LL", "LV", "MV", "HV", "HH")}
+    _stub_pair_config(monkeypatch, stops=stops)
+    errors = []
+    validation.validate_pair_params(errors)
+    assert errors == []
+    for lvl in ("LL", "LV", "MV", "HV", "HH"):
+        assert validation.STOP_PERCENTILES["XBTEUR"][lvl] == 0.90

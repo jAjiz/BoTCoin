@@ -1,8 +1,10 @@
 import logging
+from typing import Any
 
 from core.config import (
     ALLOW_NO_AUTH,
     API_SECRET_TOKEN,
+    ASSET_ALLOCATION,
     ATR_DESV_LIMIT,
     ATR_PERIOD,
     CANDLE_TIMEFRAME,
@@ -11,10 +13,14 @@ from core.config import (
     PAIRS,
     PARAM_SESSIONS,
     SLEEPING_INTERVAL,
+    STOP_PCT_DEFAULT,
+    STOP_PERCENTILES,
     TELEGRAM_ENABLED,
     TELEGRAM_POLL_INTERVAL,
     TELEGRAM_TOKEN,
     TELEGRAM_USER_ID,
+    TRADING_PARAMS,
+    VOLATILITY_LEVELS,
 )
 from exchange.kraken import build_pairs_map
 
@@ -59,6 +65,100 @@ def validate_common_params(errors: list[str]) -> None:
         errors.append("PAIRS is missing or empty")
 
 
+def _parse_float(
+    value: Any,
+    name: str,
+    errors: list[str],
+    *,
+    min_val: float | None = None,
+    max_val: float | None = None,
+) -> float | None:
+    """Parse value to float. Empty/None returns None."""
+    if value is None or value == "":
+        return None
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        errors.append(f"{name} must be a float (got {value!r})")
+        return None
+    if min_val is not None and f < min_val:
+        errors.append(f"{name} must be >= {min_val} (got {f})")
+        return None
+    if max_val is not None and f > max_val:
+        errors.append(f"{name} must be <= {max_val} (got {f})")
+        return None
+    return f
+
+
+def validate_pair_params(errors: list[str]) -> None:
+    """Validate and normalize per-pair trading parameters.
+
+    Rules:
+    - K_ACT: float, or unset/empty (treated as None — fall through to K_STOP+MIN_MARGIN path).
+    - MIN_MARGIN: only required (must be float) when K_ACT is None.
+    - TARGET_PCT: float in [0, 100]; the sum across pairs must also be <= 100.
+    - HODL_PCT: float in [0, 100].
+    - STOP_PCT_<level>: float in [0, 1] or unset (default 0.90).
+
+    On success, writes normalized typed values back into TRADING_PARAMS,
+    ASSET_ALLOCATION and STOP_PERCENTILES so consumers always see floats/None.
+    """
+    total_target = 0.0
+    for pair in PAIRS:
+        for side in ("sell", "buy"):
+            side_label = side.upper()
+
+            k_act = _parse_float(
+                TRADING_PARAMS[pair][side]["K_ACT"],
+                f"{pair}_{side_label}_K_ACT",
+                errors,
+            )
+            TRADING_PARAMS[pair][side]["K_ACT"] = k_act
+
+            min_margin_raw = TRADING_PARAMS[pair][side]["MIN_MARGIN"]
+            if k_act is None:
+                min_margin = _parse_float(min_margin_raw, f"{pair}_{side_label}_MIN_MARGIN", errors)
+                if min_margin is None and min_margin_raw in (None, ""):
+                    errors.append(f"{pair}_{side_label}_MIN_MARGIN is required when K_ACT is not set")
+                TRADING_PARAMS[pair][side]["MIN_MARGIN"] = min_margin
+            else:
+                # K_ACT defined — MIN_MARGIN unused. Normalize to a float if parseable, else 0.
+                parsed = _parse_float(min_margin_raw, f"{pair}_{side_label}_MIN_MARGIN", [])
+                TRADING_PARAMS[pair][side]["MIN_MARGIN"] = parsed if parsed is not None else 0.0
+
+        target_pct = _parse_float(
+            ASSET_ALLOCATION[pair]["TARGET_PCT"],
+            f"{pair}_TARGET_PCT",
+            errors,
+            min_val=0,
+            max_val=100,
+        )
+        ASSET_ALLOCATION[pair]["TARGET_PCT"] = target_pct if target_pct is not None else 0.0
+        total_target += ASSET_ALLOCATION[pair]["TARGET_PCT"]
+
+        hodl_pct = _parse_float(
+            ASSET_ALLOCATION[pair]["HODL_PCT"],
+            f"{pair}_HODL_PCT",
+            errors,
+            min_val=0,
+            max_val=100,
+        )
+        ASSET_ALLOCATION[pair]["HODL_PCT"] = hodl_pct if hodl_pct is not None else 0.0
+
+        for level in VOLATILITY_LEVELS:
+            parsed = _parse_float(
+                STOP_PERCENTILES[pair][level],
+                f"{pair}_STOP_PCT_{level}",
+                errors,
+                min_val=0,
+                max_val=1,
+            )
+            STOP_PERCENTILES[pair][level] = parsed if parsed is not None else STOP_PCT_DEFAULT
+
+    if total_target > 100:
+        errors.append(f"Sum of TARGET_PCT across all pairs must not exceed 100 (got {total_target:g})")
+
+
 def build_and_validate_pairs(errors: list[str]) -> None:
     try:
         build_pairs_map(PAIRS)
@@ -89,6 +189,7 @@ def validate_config() -> bool:
 
     if not errors:
         build_and_validate_pairs(errors)
+        validate_pair_params(errors)
 
     # Log all errors at the end
     if errors:

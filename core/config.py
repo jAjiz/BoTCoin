@@ -38,6 +38,11 @@ MIN_VALUE = float(os.getenv("MIN_VALUE", 10))  # Minimum value operation in fiat
 # Pairs names map and info
 PAIRS = {pair: {} for pair in os.getenv("PAIRS", "").split(",")}
 
+# CONSTANTS DEFINITION
+FIAT_CODE = "ZEUR"
+VOLATILITY_LEVELS = ("LL", "LV", "MV", "HV", "HH")
+STOP_PCT_DEFAULT = 0.90  # Fallback STOP_PCT if not set for a level
+
 
 # Trading params
 def _build_trading_params() -> dict[str, dict[str, dict[str, Any]]]:
@@ -45,12 +50,12 @@ def _build_trading_params() -> dict[str, dict[str, dict[str, Any]]]:
     for pair in PAIRS:
         params[pair] = {
             "sell": {
-                "K_ACT": os.getenv(f"{pair}_SELL_K_ACT", os.getenv(f"{pair}_K_ACT", None)),
-                "MIN_MARGIN": os.getenv(f"{pair}_SELL_MIN_MARGIN", os.getenv(f"{pair}_MIN_MARGIN", 0)),
+                "K_ACT": os.getenv(f"{pair}_SELL_K_ACT", os.getenv(f"{pair}_K_ACT")),
+                "MIN_MARGIN": os.getenv(f"{pair}_SELL_MIN_MARGIN", os.getenv(f"{pair}_MIN_MARGIN")),
             },
             "buy": {
-                "K_ACT": os.getenv(f"{pair}_BUY_K_ACT", os.getenv(f"{pair}_K_ACT", None)),
-                "MIN_MARGIN": os.getenv(f"{pair}_BUY_MIN_MARGIN", os.getenv(f"{pair}_MIN_MARGIN", 0)),
+                "K_ACT": os.getenv(f"{pair}_BUY_K_ACT", os.getenv(f"{pair}_K_ACT")),
+                "MIN_MARGIN": os.getenv(f"{pair}_BUY_MIN_MARGIN", os.getenv(f"{pair}_MIN_MARGIN")),
             },
         }
     return params
@@ -64,8 +69,8 @@ def _build_asset_allocation() -> dict[str, dict[str, Any]]:
     allocations = {}
     for pair in PAIRS:
         allocations[pair] = {
-            "TARGET_PCT": os.getenv(f"{pair}_TARGET_PCT", 0),
-            "HODL_PCT": os.getenv(f"{pair}_HODL_PCT", 0),
+            "TARGET_PCT": os.getenv(f"{pair}_TARGET_PCT"),
+            "HODL_PCT": os.getenv(f"{pair}_HODL_PCT"),
         }
     return allocations
 
@@ -80,21 +85,11 @@ MARKET_ANALYZER = {
 
 
 # K_STOP percentiles
-def _build_percentiles() -> dict[str, dict[str, float]]:
+def _build_percentiles() -> dict[str, dict[str, Any]]:
     percentiles = {}
     for pair in PAIRS:
-        percentiles[pair] = {
-            "LL": float(os.getenv(f"{pair}_STOP_PCT_LL", 0.90)),
-            "LV": float(os.getenv(f"{pair}_STOP_PCT_LV", 0.90)),
-            "MV": float(os.getenv(f"{pair}_STOP_PCT_MV", 0.90)),
-            "HV": float(os.getenv(f"{pair}_STOP_PCT_HV", 0.90)),
-            "HH": float(os.getenv(f"{pair}_STOP_PCT_HH", 0.90)),
-        }
+        percentiles[pair] = {level: os.getenv(f"{pair}_STOP_PCT_{level}") for level in VOLATILITY_LEVELS}
     return percentiles
 
 
 STOP_PERCENTILES = _build_percentiles()
-
-# CONSTANTS DEFINITION
-FIAT_CODE = "ZEUR"
-VOLATILITY_LEVELS = ("LL", "LV", "MV", "HV", "HH")
