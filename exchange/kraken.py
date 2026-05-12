@@ -84,11 +84,18 @@ def get_balance() -> dict[str, str] | None:
     return _safe_call("balance", lambda: api.query_private("Balance"))
 
 
-def get_order_status(order_id: str) -> str | None:
-    result = _safe_call("order status", lambda: api.query_private("QueryOrders", {"txid": order_id}))
+def get_order_closing_price(order_id: str) -> float | None:
+    """Return the average execution price of a filled order, or None if still pending/open."""
+    result = _safe_call("order closing price", lambda: api.query_private("QueryOrders", {"txid": order_id}))
     if result is None:
         return None
-    return result.get(order_id, {}).get("status")
+    order = result.get(order_id, {})
+    if order.get("status") in (None, "pending", "open"):
+        return None
+    price = order.get("price")
+    if price is None:
+        return None
+    return float(price)
 
 
 def get_last_prices(pairs_dict: dict[str, dict[str, Any]]) -> dict[str, float] | None:

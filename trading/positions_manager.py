@@ -3,7 +3,7 @@ from typing import Any
 import core.logging as logging
 from core.config import ATR_DESV_LIMIT, MIN_VALUE, TRADING_PARAMS
 from core.utils import now_utc
-from exchange.kraken import get_order_status, place_limit_order
+from exchange.kraken import get_order_closing_price, place_limit_order
 from trading.inventory_manager import calculate_position
 from trading.parameters_manager import get_k_stop
 
@@ -131,13 +131,22 @@ def is_open(pos: dict[str, Any] | None) -> bool:
 
 
 def is_closing_complete(pos: dict[str, Any] | None) -> bool:
+    """Check if the closing order is filled. If so, update pos with the real fill price and PnL."""
     if not pos:
         return False
     closing_order = pos.get("closing_order_id")
     if not closing_order:
         return False
-    status = get_order_status(closing_order)
-    return bool(status) and status not in ("pending", "open")
+    closing_price = get_order_closing_price(closing_order)
+    if closing_price is None:
+        return False
+    entry = pos["entry_price"]
+    side = pos["side"]
+    pnl = (closing_price - entry) / entry * 100 if side == "sell" else (entry - closing_price) / entry * 100
+    pos["closing_price"] = closing_price
+    pos["pnl_percent"] = round(pnl, 4)
+    logging.info(f"💸 Position closed: {pnl:+.2f}% result", to_telegram=True)
+    return True
 
 
 def tick_position(
@@ -201,7 +210,6 @@ def tick_position(
 def close_position(pair: str, pos: dict[str, Any], last_prices: dict[str, float]) -> None:
     try:
         side = pos["side"]
-        entry_price = pos["entry_price"]
         stop_price = pos["stop_price"]
         current_price = last_prices[pair]
         logging.info(
@@ -210,16 +218,10 @@ def close_position(pair: str, pos: dict[str, Any], last_prices: dict[str, float]
 
         volume = float(pos.get("volume", 0.0))
 
-        if side == "sell":
-            pnl = (current_price - entry_price) / entry_price * 100
-        else:
-            pnl = (entry_price - current_price) / entry_price * 100
-
         closing_order = place_limit_order(pair, side, current_price, volume)
         if not closing_order:
             logging.error("Failed to place closing order. Aborting close.", to_telegram=True)
             return
-        logging.info(f"💸 Closed position: {pnl:+.2f}% result", to_telegram=True)
 
         pos.update(
             {
@@ -227,7 +229,6 @@ def close_position(pair: str, pos: dict[str, Any], last_prices: dict[str, float]
                 "closing_price": current_price,
                 "closing_order_id": closing_order,
                 "closing_requested_at": now_utc(),
-                "pnl_percent": round(pnl, 4),
             }
         )
     except Exception as e:

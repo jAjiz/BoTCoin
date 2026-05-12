@@ -41,32 +41,28 @@ def test_get_balance_returns_none_on_exception(monkeypatch) -> None:
 
 
 # ============================================================================
-# Order status
+# Closing price
 # ============================================================================
 
 
-def test_get_order_status_returns_status_on_success(monkeypatch) -> None:
+def test_get_order_closing_price_returns_price_when_filled(monkeypatch) -> None:
     monkeypatch.setattr(
         kraken.api,
         "query_private",
-        lambda *args, **kwargs: {"error": [], "result": {"ORDER123": {"status": "closed"}}},
+        lambda *args, **kwargs: {"error": [], "result": {"ORD001": {"status": "closed", "price": "69099.7"}}},
     )
 
-    result = kraken.get_order_status("ORDER123")
-
-    assert result == "closed"
+    assert kraken.get_order_closing_price("ORD001") == 69099.7
 
 
-def test_get_order_status_returns_none_on_api_error(monkeypatch) -> None:
+def test_get_order_closing_price_returns_none_when_not_filled(monkeypatch) -> None:
     monkeypatch.setattr(
         kraken.api,
         "query_private",
-        lambda *args, **kwargs: {"error": ["EOrder:Unknown order"], "result": {}},
+        lambda *args, **kwargs: {"error": [], "result": {"ORD001": {"status": "open", "price": "0"}}},
     )
 
-    result = kraken.get_order_status("INVALID")
-
-    assert result is None
+    assert kraken.get_order_closing_price("ORD001") is None
 
 
 # ============================================================================

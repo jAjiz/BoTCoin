@@ -203,7 +203,7 @@ def test_close_position_updates_position_on_success(monkeypatch) -> None:
     assert pos["closing_order_id"] == "ORDER123"
     assert pos["closing_requested_at"] == _now
     assert pos["closing_price"] == 90.0
-    assert pos["pnl_percent"] == -10.0
+    assert "pnl_percent" not in pos
 
 
 # ============================================================================
@@ -234,23 +234,27 @@ def test_is_closing_complete_returns_false_without_closing_order(pos) -> None:
     assert positions_manager.is_closing_complete(pos) is False
 
 
-@pytest.mark.parametrize("status", ["pending", "open"])
-def test_is_closing_complete_returns_false_while_order_in_flight(monkeypatch, status) -> None:
-    monkeypatch.setattr(positions_manager, "get_order_status", lambda _: status)
+def test_is_closing_complete_returns_false_while_order_in_flight(monkeypatch) -> None:
+    monkeypatch.setattr(positions_manager, "get_order_closing_price", lambda _: None)
 
     assert positions_manager.is_closing_complete({"closing_order_id": "ORD001"}) is False
 
 
-def test_is_closing_complete_returns_true_when_order_filled(monkeypatch) -> None:
-    monkeypatch.setattr(positions_manager, "get_order_status", lambda _: "closed")
+def test_is_closing_complete_returns_true_and_updates_pos_when_order_filled(monkeypatch) -> None:
+    monkeypatch.setattr(positions_manager, "get_order_closing_price", lambda _: 69099.7)
 
-    assert positions_manager.is_closing_complete({"closing_order_id": "ORD001"}) is True
+    pos = {"closing_order_id": "ORD001", "entry_price": 68000.0, "side": "sell"}
+    assert positions_manager.is_closing_complete(pos) is True
+    assert pos["closing_price"] == 69099.7
+    assert pos["pnl_percent"] == round((69099.7 - 68000.0) / 68000.0 * 100, 4)
 
 
-def test_is_closing_complete_returns_false_when_status_none(monkeypatch) -> None:
-    monkeypatch.setattr(positions_manager, "get_order_status", lambda _: None)
+def test_is_closing_complete_pnl_for_buy_side(monkeypatch) -> None:
+    monkeypatch.setattr(positions_manager, "get_order_closing_price", lambda _: 67000.0)
 
-    assert positions_manager.is_closing_complete({"closing_order_id": "ORD001"}) is False
+    pos = {"closing_order_id": "ORD001", "entry_price": 68000.0, "side": "buy"}
+    assert positions_manager.is_closing_complete(pos) is True
+    assert pos["pnl_percent"] == round((68000.0 - 67000.0) / 68000.0 * 100, 4)
 
 
 # ============================================================================
