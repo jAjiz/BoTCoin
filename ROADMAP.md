@@ -21,6 +21,7 @@ This document outlines the improvement areas and phased plan for the next iterat
   - [Phase 8 – Observability: Grafana Dashboard](#phase-8--observability-grafana-dashboard)
   - [Phase 9 – Project Documentation & Portfolio Framing](#phase-9--project-documentation--portfolio-framing)
   - [Phase 10 – Trading Tools Integration: Backtest + Optimizer](#phase-10--trading-tools-integration-backtest--optimizer)
+  - [Phase 11 – Strategy Refinement: Trend/Chop Regime Filter](#phase-11--strategy-refinement-trendchop-regime-filter)
 - [Out of Scope](#-out-of-scope)
 
 ---
@@ -80,6 +81,9 @@ The README is the project's cover letter. It must lead with engineering decision
 
 ### 10. Trading Tools Integration: Backtest + Optimizer
 The V1 analysis scripts (`trading/backtest.py`, `trading/optimize_params.py`) are CLI-only and mutate global trading config — a hazard the live bot is currently isolated from only because they are invoked out-of-process. Folding them into the API as JSON endpoints — sync `/backtest`, async `/optimizer/jobs` with Postgres persistence and a single-slot `multiprocessing` worker — turns one-off scripts into reusable services without risking the live bot's config state, while introducing Numba JIT and Optuna TPE search to keep both endpoints fast.
+
+### 11. Strategy Refinement: Trend/Chop Regime Filter
+The current ATR-based volatility classification measures move *magnitude* but not move *efficiency* — a low-vol trend and a low-vol chop receive identical K_STOP values and are treated identically. Trailing-stop strategies bleed in sideways markets through repeated false-reversal entries (each clipped by fees and slippage), so adding a regime filter that gates new entries during chop addresses the strategy's known weak case without altering the exit logic. The Choppiness Index reuses the existing ATR pipeline and fits the project's percentile-calibration style.
 
 ---
 
@@ -356,6 +360,39 @@ Detailed execution plan: [`plan/phase-7-cicd.md`](plan/phase-7-cicd.md).
 Detailed execution plan: [`plan/phase-10-trading-tools-integration.md`](plan/phase-10-trading-tools-integration.md).
 
 **Success criteria:** `POST /backtest` returns a populated result in under a second on 60d of 15-min OHLC. `POST /optimizer/jobs` returns a `job_id` immediately; results persist to Postgres; a second submission while one is running returns `409`. A crash mid-run leaves the row marked `failed` after the next startup, never `running` indefinitely. The two scripts in `trading/` no longer have CLI entry points and never mutate global trading config.
+
+---
+
+### Phase 11 – Strategy Refinement: Trend/Chop Regime Filter
+
+**Goal:** Add a Choppiness Index–based regime classifier that gates new position entries during sideways markets while leaving the trailing-stop exit logic untouched. The filter reuses the existing OHLC + ATR pipeline, introduces no new external dependencies, and ships in two stages — observation first, enforcement second — so behavior changes are validated against live data before being enabled.
+
+**Scope:**
+
+#### Stage A — Observation
+- [ ] Add `get_trend_regime` in `trading/market_analyzer.py` that computes the Choppiness Index from the existing ATR pipeline and `ohlc_data`
+- [ ] Classify the regime into `TREND` / `MIXED` / `CHOP` using empirically derived percentile boundaries from each pair's own historical OHLC (matching the K_STOP calibration style)
+- [ ] Apply hysteresis at boundary transitions to prevent oscillation (separate thresholds for entering vs leaving each regime, with a configurable dead band)
+- [ ] Expose the current per-pair regime via `core/runtime.py` and surface it through `GET /market` and the Telegram `/market` command
+- [ ] Log every regime transition (info-level) so a long enough observation window can be reviewed before flipping enforcement on
+- [ ] Unit tests for CI computation, regime classification, hysteresis, and the runtime/API surface
+
+#### Stage B — Enforcement
+- [ ] Extend the activation precondition in `trading/positions_manager.py` so `create_position` (or activation inside `tick_position`) is gated by `regime != CHOP`
+- [ ] Active positions are deliberately unaffected — the trailing stop remains the sole exit policy across regime flips
+- [ ] Add a `TRADE_ON_CHOP` per-pair env flag (default `false` once Stage B ships) so the gate can be toggled per pair without redeploy
+- [ ] Unit tests covering: no activation during CHOP, normal activation in TREND/MIXED, and that existing open positions continue to tick and exit unchanged across regime flips
+
+#### Calibration & docs
+- [ ] Document threshold values and their derivation method in `docs/trading-strategy.md` (Phase 9 deliverable)
+- [ ] Once Phase 10 lands, revalidate thresholds via `POST /optimizer/jobs` comparing gated vs ungated PnL over historical data; record the chosen values back into `docs/trading-strategy.md`
+
+**Dependencies:**
+
+- Stage A is independent and can ship immediately — it is purely observational.
+- Stage B can ship before Phase 10 using percentile-derived thresholds, but principled threshold optimization requires the backtest/optimizer endpoints delivered in Phase 10.
+
+**Success criteria:** The bot publishes a per-pair regime label through the API and Telegram. With enforcement enabled, no new positions activate while the regime is `CHOP`, and regime transitions are smoothed by hysteresis (no flicker within the configured dead band). Existing open positions are unaffected by regime flips and continue to exit only via the trailing stop. Threshold values are documented in `docs/trading-strategy.md` with a traceable derivation (percentile or backtest-derived).
 
 ---
 
