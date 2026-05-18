@@ -9,7 +9,7 @@
   - `docker-compose.yml` — base compose; the `grafana` service is appended here so the local dev stack matches production
   - `docker-compose.prod.yml` — production override; no Grafana-specific changes needed (image not built locally)
   - `core/database.py` — `OHLCData`, `ClosedPosition`, `TrailingState`, `BotControl` ORM models — Grafana queries hit these four tables exclusively
-  - `core/scheduler.py` — `trading_session()` runs once per `SLEEPING_INTERVAL`; gains a single heartbeat write at the end of the function
+  - `core/scheduler.py` — `trading_session()` runs once per `SLEEPING_INTERVAL`; gains session-tracking writes (a `sessions` row opened at the top and finalized in a `finally` block with status, balance, per-pair data, and the captured log buffer)
   - `scripts/migrations/versions/20260414_01_phase4_initial_schema.py` — reference style for Alembic migrations; Phase 8 adds one new revision
   - `.env.example` — every supported env var is documented here; Grafana adds three keys
   - `README.md` — Quick Start, Infrastructure sections (will receive a Grafana subsection and a dashboard screenshot stub)
@@ -18,7 +18,7 @@
   - **Read-only Postgres role for Grafana** (`grafana_reader`, password from env). Created via an Alembic migration so the existing migration pipeline owns the lifecycle. Grafana never connects as the bot's read/write user.
   - **Filesystem provisioning, not the HTTP API.** The datasource and dashboard JSON live under `grafana/` in the repo and are mounted into the container at `/etc/grafana/provisioning/`. Grafana applies them on every container start — no admin clicks, no manual export step on the running VPS.
   - **Dashboard JSON is hand-authored from a documented spec, then committed.** A developer builds the dashboard once in the Grafana UI (using the panel spec in Step 5), exports the JSON via the "Share → Export" dialog with `For external use` enabled, and commits the file. Subsequent edits go through the same export round-trip — no in-place UI edits on the deployed instance.
-  - **No new application data is collected.** The four existing tables plus a single `last_heartbeat` row in `bot_control` cover every panel. Application logs and a metrics endpoint stay out of scope; if a panel cannot be expressed as SQL over these tables, it is not in this phase.
+  - **One new application table is introduced: `sessions`.** Each scheduler tick writes one row capturing start/end timestamps, completion status, the balance snapshot, per-pair market data, and the log lines emitted during the session. The four existing tables plus this one cover every panel. A separate logs/metrics pipeline (Loki, Prometheus, OpenTelemetry) stays out of scope; if a panel cannot be expressed as SQL over these five tables, it is not in this phase.
   - **Anonymous read-only access for the local instance**, single-admin login for any non-local deploy. The Grafana service binds to `127.0.0.1:3000` only, so anonymous read access is acceptable for a single-user setup; the admin login still gates write access.
 
 ## Target architecture
@@ -28,9 +28,11 @@
 │  botc (uvicorn :8000)                │
 │  └─ scheduler                        │
 │       └─ trading_session()           │
-│            └─ bot_control.set(       │
-│                  'last_heartbeat',   │
-│                  now_utc())          │
+│            ├─ db.create_session()    │
+│            │   (status='running')    │
+│            └─ db.finalize_session()  │
+│                (status, balance,     │
+│                 pair_data, logs)     │
 └────────────────┬─────────────────────┘
                  │ SQLAlchemy (read/write as POSTGRES_USER)
                  ▼
@@ -40,6 +42,7 @@
 │   closed_positions                   │  as            │   provisioned dashboard  │
 │   trailing_state                     │  grafana_reader│   (volume: gf_data)      │
 │   bot_control                        │                │                          │
+│   sessions                           │                │                          │
 └──────────────────────────────────────┘                └────────────┬─────────────┘
                                                                      │
                                                                      ▼
@@ -73,91 +76,47 @@ No commit yet — this step is just the mental layout.
 
 ---
 
-## Step 1 — Heartbeat write in the scheduler
+## Step 1 — `sessions` table and per-session telemetry
 
-The Phase 8 system-metrics panels need a single Postgres-observable signal that proves the scheduler is alive. The cleanest source is `bot_control` — the table already exists with a generic key/value shape and matching DAL (`set_control_value`), and Phase 5 already uses it for the `bot_paused` flag.
+Phase 8 needs richer per-session telemetry than a single `last_heartbeat` timestamp can provide. A new `sessions` table records every scheduler tick — start/end timestamps, completion status, the balance snapshot, per-pair market data, and the log lines emitted during the session — so Grafana can plot session throughput, failure rate, and the data the bot saw without the operator needing to grep container logs. The "seconds since last successful session" panel is then derived from `MAX(ended_at) WHERE status = 'ok'`, replacing the original `bot_control.last_heartbeat` design.
 
-### 1.1 Append the heartbeat write to `trading_session()`
+### 1.1 ORM model
 
-Edit `core/scheduler.py`. The current end of `trading_session()` is:
-
-```python
-    _session_count += 1
-    runtime.update_last_run_at(now_utc())
-    logging.info("======== SESSION COMPLETE ========")
-```
-
-Replace with:
+Add to `core/database.py` after the `BotControl` model:
 
 ```python
-    _session_count += 1
-    now = now_utc()
-    runtime.update_last_run_at(now)
-    db.set_control_value("last_heartbeat", now.isoformat(), updated_by="scheduler")
-    logging.info("======== SESSION COMPLETE ========")
+from sqlalchemy.dialects.postgresql import JSONB
+
+
+class Session(Base):
+    __tablename__ = "sessions"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    balance: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    pair_data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    log_messages: Mapped[list | None] = mapped_column(JSONB, nullable=True)
 ```
 
-Implementation notes:
-- `now_utc()` returns a timezone-aware `datetime`. `isoformat()` produces an RFC-3339 string Postgres can cast to `timestamptz` with `(control_value::timestamptz)`.
-- Write **once per successful session**, after all per-pair work — a session that returns early (paused, balance fetch failed, prices fetch failed) intentionally does not advance the heartbeat. The panel will go red if the bot is stalled before the per-pair loop, which is the failure mode the panel is for.
-- `updated_by="scheduler"` distinguishes this from `bot_paused` writes that come from the Telegram service (`updated_by="telegram"`).
+`status` values: `running` (in-flight), `ok` (completed the per-pair loop end-to-end), `paused` (skipped because `bot_paused`), `failed` (early return due to balance/prices fetch failure or unhandled exception).
 
-### 1.2 Unit test for the heartbeat write
+The JSONB shapes:
+- `balance` — the raw dict returned by `exchange.kraken.get_balance` (e.g. `{"EUR": "123.45", "XBT": "0.001"}`). `NULL` if the balance fetch failed.
+- `pair_data` — `{pair: {"price": float, "atr": float, "volatility_level": str}}`. Only pairs whose price + ATR fetched successfully appear.
+- `log_messages` — `[{"ts": iso8601, "level": "INFO"|"WARNING"|"ERROR", "message": str}, ...]` in chronological order.
 
-Add `tests/unit/core/test_scheduler.py` (create if missing) with one test:
+### 1.2 Alembic migration
+
+A single Phase 8 migration creates the `sessions` table and provisions the read-only `grafana_reader` role + grants. They land together because the role's grant list includes `sessions`, and rolling one back without the other would leave the database in an inconsistent state for Grafana.
+
+Add `scripts/migrations/versions/20260512_01_phase8_observability.py`:
 
 ```python
-def test_trading_session_writes_heartbeat(monkeypatch):
-    from datetime import datetime, UTC
-    import core.scheduler as scheduler
-    import core.database as db
-    import core.runtime as runtime
+"""Phase 8: sessions table + grafana_reader role.
 
-    fixed_now = datetime(2026, 5, 12, 10, 0, 0, tzinfo=UTC)
-    monkeypatch.setattr(scheduler, "now_utc", lambda: fixed_now)
-    monkeypatch.setattr(db, "get_bot_paused", lambda: False)
-    monkeypatch.setattr(scheduler, "get_balance", lambda: {"EUR": "100"})
-    monkeypatch.setattr(scheduler, "get_last_prices", lambda _pairs: {})
-    monkeypatch.setattr(runtime, "update_balance", lambda _b: None)
-    monkeypatch.setattr(runtime, "update_last_run_at", lambda _ts: None)
-
-    calls: list[tuple] = []
-    monkeypatch.setattr(
-        db,
-        "set_control_value",
-        lambda key, value, updated_by=None: calls.append((key, value, updated_by)),
-    )
-
-    # PAIRS is empty when last_prices returns {}, so the inner loop is skipped.
-    monkeypatch.setattr(scheduler, "PAIRS", [])
-
-    scheduler.trading_session()
-
-    assert calls == [("last_heartbeat", fixed_now.isoformat(), "scheduler")]
-```
-
-Run inside Docker: `docker compose -f docker-compose.test.yml run --rm test pytest tests/unit/core/test_scheduler.py -v`. Must pass.
-
-**Commit:** `feat(scheduler): write last_heartbeat to bot_control after each session`
-
----
-
-## Step 2 — Read-only Postgres role via Alembic migration
-
-Create a new migration that provisions `grafana_reader` with `CONNECT` + `USAGE` + `SELECT` on the four data tables (and nothing else). Password comes from `GRAFANA_DB_PASSWORD` at upgrade time so it never lands in the repo.
-
-### 2.1 Generate the migration
-
-```
-docker compose -f docker-compose.test.yml run --rm test alembic revision -m "grafana_reader role"
-```
-
-This creates `scripts/migrations/versions/<timestamp>_grafana_reader_role.py`. Rename the auto-generated revision id stub to `20260512_02` for date-ordered readability (the existing migration is `20260414_01`). The exact body:
-
-```python
-"""Phase 8: read-only Grafana role.
-
-Revision ID: 20260512_02
+Revision ID: 20260512_01
 Revises: 20260414_01
 Create Date: 2026-05-12 00:00:00
 """
@@ -166,14 +125,16 @@ from __future__ import annotations
 
 import os
 
+import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.dialects.postgresql import JSONB
 
-revision = "20260512_02"
+revision = "20260512_01"
 down_revision = "20260414_01"
 branch_labels = None
 depends_on = None
 
-GRAFANA_TABLES = ("ohlc_data", "closed_positions", "trailing_state", "bot_control")
+GRAFANA_TABLES = ("ohlc_data", "closed_positions", "trailing_state", "bot_control", "sessions")
 
 
 def _escape_literal(value: str) -> str:
@@ -181,10 +142,24 @@ def _escape_literal(value: str) -> str:
 
 
 def upgrade() -> None:
+    # 1. sessions table — written to by the scheduler each tick.
+    op.create_table(
+        "sessions",
+        sa.Column("id", sa.BigInteger, primary_key=True, autoincrement=True),
+        sa.Column("started_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("ended_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("status", sa.String(16), nullable=False),
+        sa.Column("balance", JSONB, nullable=True),
+        sa.Column("pair_data", JSONB, nullable=True),
+        sa.Column("log_messages", JSONB, nullable=True),
+    )
+    op.create_index("ix_sessions_started_at", "sessions", ["started_at"], unique=False)
+
+    # 2. grafana_reader role — read-only login used by the Grafana datasource.
     password = os.environ.get("GRAFANA_DB_PASSWORD")
     if not password:
         raise RuntimeError(
-            "GRAFANA_DB_PASSWORD must be set in the environment for migration 20260512_02. "
+            "GRAFANA_DB_PASSWORD must be set in the environment for migration 20260512_01. "
             "Set it in .env (it is also consumed by the grafana service)."
         )
     password_sql = _escape_literal(password)
@@ -222,15 +197,262 @@ def downgrade() -> None:
     op.execute("REVOKE USAGE ON SCHEMA public FROM grafana_reader;")
     op.execute(f'REVOKE CONNECT ON DATABASE "{database}" FROM grafana_reader;')
     op.execute("DROP ROLE IF EXISTS grafana_reader;")
+    op.drop_index("ix_sessions_started_at", table_name="sessions")
+    op.drop_table("sessions")
 ```
 
 Implementation notes:
-- The migration is **idempotent on re-run**: the `DO $$` block creates the role only if missing and resets the password otherwise. This matters because `alembic upgrade head` runs on every container start (see `scripts/entrypoint.sh`).
+- **Idempotent on re-run**: the `DO $$` block creates `grafana_reader` only if missing and resets its password otherwise. This matters because `alembic upgrade head` runs on every container start (see `scripts/entrypoint.sh`). The `sessions` table is not re-created — Alembic's revision tracking handles that.
 - The password is interpolated as a Postgres string literal with `''`-escaping. The env var is operator-controlled, not user input — SQL injection is not a meaningful threat model here — but the escape keeps Postgres happy for passwords containing apostrophes.
 - `op.get_bind().engine.url.database` reads the live database name (`DBbotc` by default) so the `GRANT CONNECT` line is correct even if the operator renames it.
 - Explicitly **no** `ALL TABLES IN SCHEMA public` grant — `SELECT` is enumerated per table so adding a future write-only table (e.g. an event-log) does not silently leak rows to Grafana.
+- The `GRAFANA_DB_PASSWORD` requirement applies even to developers who only want the `sessions` table — the env var is already required by the Compose file and `.env.example`, so this introduces no new operator burden.
 
-### 2.2 Test the migration against a live Postgres
+### 1.3 DAL functions
+
+Add to `core/database.py`:
+
+```python
+def create_session(started_at: datetime) -> int:
+    with SessionLocal() as s, s.begin():
+        row = Session(started_at=started_at, status="running")
+        s.add(row)
+        s.flush()
+        return row.id
+
+
+def finalize_session(
+    session_id: int,
+    ended_at: datetime,
+    status: str,
+    balance: dict | None,
+    pair_data: dict | None,
+    log_messages: list[dict],
+) -> None:
+    with SessionLocal() as s, s.begin():
+        s.execute(
+            sa.update(Session)
+            .where(Session.id == session_id)
+            .values(
+                ended_at=ended_at,
+                status=status,
+                balance=balance,
+                pair_data=pair_data,
+                log_messages=log_messages,
+            )
+        )
+```
+
+`create_session` returns the id so `trading_session()` can hold it across the body and pass it to `finalize_session` in the `finally` block.
+
+### 1.4 Session log collector
+
+The simplest way to capture every log line emitted during a session — including those from `positions_manager` and any other module called from `trading_session()` — is a `logging.Handler` attached to the root logger for the duration of the session. This avoids threading a context object through the call graph and keeps `core/logging.py` unchanged.
+
+Add near the top of `core/scheduler.py`:
+
+```python
+import logging as std_logging
+from datetime import UTC, datetime
+
+
+class _SessionLogCollector(std_logging.Handler):
+    """Captures records into a list for persistence at session end."""
+
+    def __init__(self) -> None:
+        super().__init__(level=std_logging.INFO)
+        self.records: list[dict] = []
+
+    def emit(self, record: std_logging.LogRecord) -> None:
+        self.records.append(
+            {
+                "ts": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
+                "level": record.levelname,
+                "message": record.getMessage(),
+            }
+        )
+```
+
+### 1.5 Wire the session into `trading_session()`
+
+Replace the body of `trading_session()` so it opens a row at the top, captures `balance` and `pair_data` as they are computed, and finalizes the row in a `finally` block regardless of which path the session takes.
+
+```python
+def trading_session() -> None:
+    global _session_count
+
+    collector = _SessionLogCollector()
+    root = std_logging.getLogger()
+    root.addHandler(collector)
+
+    started_at = now_utc()
+    session_id = db.create_session(started_at)
+    status = "failed"  # overwritten on success / paused
+    current_balance: dict | None = None
+    pair_data: dict[str, dict] = {}
+
+    try:
+        if db.get_bot_paused():
+            logging.info("Bot is paused. Skipping session.\n")
+            status = "paused"
+            return
+
+        logging.info("======== STARTING SESSION ========")
+        trailing_state = {}
+
+        current_balance = call_with_retry(get_balance)
+        if current_balance is None:
+            logging.error("Could not fetch balance. Skipping session.\n")
+            return
+        runtime.update_balance(current_balance)
+
+        last_prices = call_with_retry(get_last_prices, PAIRS)
+        if last_prices is None:
+            logging.error("Could not fetch prices. Skipping session.\n")
+            return
+
+        for pair in PAIRS:
+            logging.info(f"--- Processing pair: [{pair}] ---")
+            trailing_state[pair] = db.load_trailing_state(pair)
+            current_price = last_prices.get(pair, None)
+            current_atr = call_with_retry(get_current_atr, pair)
+
+            if current_price is None or current_atr is None:
+                logging.error("Could not fetch price or ATR. Skipping this pair.")
+                continue
+
+            if _session_count % PARAM_SESSIONS == 0:
+                calculate_trading_parameters(pair)
+
+            vol_level = get_volatility_level(pair, current_atr)
+            logging.info(f"Market: {current_price:,.1f}€ | ATR: {current_atr:,.1f}€ ({vol_level})")
+            runtime.update_pair_data(pair, price=current_price, atr=current_atr, volatility_level=vol_level)
+            pair_data[pair] = {
+                "price": current_price,
+                "atr": current_atr,
+                "volatility_level": vol_level,
+            }
+
+            if is_closing_complete(trailing_state.get(pair)):
+                db.save_closed_position(pair, trailing_state[pair])
+                db.delete_trailing_state(pair)
+                del trailing_state[pair]
+                logging.info(f"Trailing position removed for {pair}.")
+
+            if not trailing_state.get(pair):
+                create_position(pair, current_balance, last_prices, current_atr, trailing_state)
+
+            if is_open(trailing_state.get(pair)):
+                tick_position(pair, trailing_state[pair], current_balance, last_prices, current_atr, trailing_state)
+
+            if trailing_state.get(pair):
+                db.save_trailing_state(pair, trailing_state[pair])
+            else:
+                db.delete_trailing_state(pair)
+
+        _session_count += 1
+        runtime.update_last_run_at(now_utc())
+        logging.info("======== SESSION COMPLETE ========")
+        status = "ok"
+    except Exception:
+        logging.exception("Unhandled exception in trading_session")
+        status = "failed"
+        raise
+    finally:
+        root.removeHandler(collector)
+        db.finalize_session(
+            session_id=session_id,
+            ended_at=now_utc(),
+            status=status,
+            balance=current_balance,
+            pair_data=pair_data,
+            log_messages=collector.records,
+        )
+```
+
+Implementation notes:
+- `_session_count` only increments on the success path, so failed sessions do not advance the `PARAM_SESSIONS` cadence.
+- `balance` is recorded only when the fetch succeeded — a failed session stores `NULL`, which Grafana can render as a gap.
+- `pair_data` accumulates per-pair entries lazily, so a partial session still records what was seen for the pairs that succeeded before the error.
+- The `except`/`raise` preserves APScheduler's existing traceback logging; the `finally` block guarantees the row is finalized either way.
+- The collector is attached to the root logger, not the `core.logging` module logger — `logging.basicConfig` in `core/logging.py` routes everything through the root logger, so a single attach captures records from every module called during the session.
+
+### 1.6 Unit tests
+
+Add `tests/unit/core/test_scheduler.py`:
+
+```python
+from datetime import UTC, datetime
+
+import core.database as db
+import core.runtime as runtime
+import core.scheduler as scheduler
+
+
+def _patch_finalize(monkeypatch) -> list[dict]:
+    calls: list[dict] = []
+    monkeypatch.setattr(db, "create_session", lambda _started: 1)
+    monkeypatch.setattr(db, "finalize_session", lambda **kwargs: calls.append(kwargs))
+    return calls
+
+
+def test_trading_session_records_successful_session(monkeypatch):
+    fixed_now = datetime(2026, 5, 12, 10, 0, 0, tzinfo=UTC)
+    monkeypatch.setattr(scheduler, "now_utc", lambda: fixed_now)
+    monkeypatch.setattr(db, "get_bot_paused", lambda: False)
+    monkeypatch.setattr(scheduler, "get_balance", lambda: {"EUR": "100"})
+    monkeypatch.setattr(scheduler, "get_last_prices", lambda _pairs: {})
+    monkeypatch.setattr(runtime, "update_balance", lambda _b: None)
+    monkeypatch.setattr(runtime, "update_last_run_at", lambda _ts: None)
+    monkeypatch.setattr(scheduler, "PAIRS", [])
+    calls = _patch_finalize(monkeypatch)
+
+    scheduler.trading_session()
+
+    final = calls[0]
+    assert final["session_id"] == 1
+    assert final["status"] == "ok"
+    assert final["balance"] == {"EUR": "100"}
+    assert final["pair_data"] == {}
+    assert any("SESSION COMPLETE" in m["message"] for m in final["log_messages"])
+
+
+def test_trading_session_records_paused_session(monkeypatch):
+    monkeypatch.setattr(scheduler, "now_utc", lambda: datetime(2026, 5, 12, 10, 0, 0, tzinfo=UTC))
+    monkeypatch.setattr(db, "get_bot_paused", lambda: True)
+    calls = _patch_finalize(monkeypatch)
+
+    scheduler.trading_session()
+
+    assert calls[0]["status"] == "paused"
+    assert calls[0]["balance"] is None
+    assert calls[0]["pair_data"] == {}
+
+
+def test_trading_session_records_failed_balance_fetch(monkeypatch):
+    monkeypatch.setattr(scheduler, "now_utc", lambda: datetime(2026, 5, 12, 10, 0, 0, tzinfo=UTC))
+    monkeypatch.setattr(db, "get_bot_paused", lambda: False)
+    monkeypatch.setattr(scheduler, "get_balance", lambda: None)
+    calls = _patch_finalize(monkeypatch)
+
+    scheduler.trading_session()
+
+    assert calls[0]["status"] == "failed"
+    assert calls[0]["balance"] is None
+    assert any("Could not fetch balance" in m["message"] for m in calls[0]["log_messages"])
+```
+
+Run inside Docker: `docker compose -f docker-compose.test.yml run --rm test pytest tests/unit/core/test_scheduler.py -v`. All three must pass.
+
+**Commit:** `feat(observability): sessions table, per-session telemetry, and grafana_reader role`
+
+---
+
+## Step 2 — Validate the read-only role and wire up CI
+
+The migration that creates `grafana_reader` lives in Step 1.2 (folded into the unified Phase 8 migration). This step covers the supporting work: an integration test that proves the role's permissions, the `.env.example` entries it depends on, and the CI changes needed to pass `GRAFANA_DB_PASSWORD` through Docker Compose.
+
+### 2.1 Test the migration against a live Postgres
 
 Integration tests already require `RUN_DB_INTEGRATION=true`. Add `tests/integration/test_grafana_role.py`:
 
@@ -262,7 +484,7 @@ def _reader_engine():
 def test_grafana_reader_can_select_each_table():
     engine = _reader_engine()
     with engine.connect() as conn:
-        for table in ("ohlc_data", "closed_positions", "trailing_state", "bot_control"):
+        for table in ("ohlc_data", "closed_positions", "trailing_state", "bot_control", "sessions"):
             conn.execute(text(f"SELECT 1 FROM {table} LIMIT 1"))
 
 
@@ -280,7 +502,7 @@ def test_grafana_reader_cannot_insert():
 
 Run: `docker compose -f docker-compose.test.yml run --rm -e GRAFANA_DB_PASSWORD=test test pytest tests/integration/test_grafana_role.py -v`. The CI integration job will pick this up automatically through the existing test discovery glob.
 
-### 2.3 `.env.example`
+### 2.2 `.env.example`
 
 Append:
 
@@ -301,7 +523,7 @@ GF_SECURITY_ADMIN_PASSWORD=change_me_with_a_strong_password
 
 The `GF_*` variable names are the exact names Grafana reads at startup — do not rename them.
 
-### 2.4 CI integration job
+### 2.3 CI integration job
 
 `.github/workflows/ci.yml`'s `integration` job currently sets `RUN_DB_INTEGRATION=true` but not `GRAFANA_DB_PASSWORD`. The migration step will fail without it. Edit the integration job's `Apply Alembic migrations` and `Run integration tests` steps to add `-e GRAFANA_DB_PASSWORD=ci_grafana_password`:
 
@@ -322,7 +544,7 @@ The `GF_*` variable names are the exact names Grafana reads at startup — do no
             test pytest tests/integration
 ```
 
-**Commit:** `feat(db): add grafana_reader role migration and integration test`
+**Commit:** `test(db): grafana_reader integration test and CI wiring`
 
 ---
 
@@ -486,15 +708,26 @@ Three rows, twelve panels total. All panels target the `PostgreSQL` datasource (
 
 | # | Title | Panel type | Query |
 |---|---|---|---|
-| 10 | Seconds since last heartbeat | Stat (thresholds: green ≤ 120, yellow ≤ 300, red > 300) | `SELECT EXTRACT(EPOCH FROM (now() - (control_value::timestamptz))) FROM bot_control WHERE control_key = 'last_heartbeat'` |
+| 10 | Seconds since last successful session | Stat (thresholds: green ≤ 120, yellow ≤ 300, red > 300) | `SELECT EXTRACT(EPOCH FROM (now() - MAX(ended_at))) FROM sessions WHERE status = 'ok'` |
 | 11 | Bot paused | Stat (value mapping: `1` → "PAUSED" red, `0` → "RUNNING" green) | `SELECT (control_value = 'true')::int FROM bot_control WHERE control_key = 'bot_paused'` |
 | 12 | OHLC ingestion rate | Time series | `SELECT date_trunc('hour', updated_at) AS time, pair AS metric, COUNT(*) AS rows FROM ohlc_data WHERE $__timeFilter(updated_at) AND pair IN ($pair) GROUP BY 1, pair ORDER BY 1` |
+
+#### Row 4 — Sessions
+
+| # | Title | Panel type | Query |
+|---|---|---|---|
+| 13 | Sessions per hour by status | Time series (stacked) | `SELECT date_trunc('hour', started_at) AS time, status AS metric, COUNT(*) AS sessions FROM sessions WHERE $__timeFilter(started_at) GROUP BY 1, status ORDER BY 1` |
+| 14 | Session failure rate (last 24h) | Stat (thresholds: green ≤ 0.05, yellow ≤ 0.20, red > 0.20) | `SELECT COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END)::float / NULLIF(COUNT(*), 0), 0) FROM sessions WHERE started_at >= now() - interval '24 hours'` |
+| 15 | Recent sessions | Table | `SELECT id, started_at, ended_at, status, EXTRACT(EPOCH FROM (ended_at - started_at)) AS duration_s, jsonb_array_length(COALESCE(log_messages, '[]'::jsonb)) AS log_count FROM sessions ORDER BY started_at DESC LIMIT 50` |
+| 16 | Last session log | Logs | `SELECT (msg->>'ts')::timestamptz AS time, msg->>'level' AS level, msg->>'message' AS body FROM sessions, jsonb_array_elements(log_messages) AS msg WHERE id = (SELECT MAX(id) FROM sessions) ORDER BY time` |
 
 Implementation notes for the panel author:
 - Every time-series query orders by `time ASC` because Grafana's Postgres datasource requires it for proper graph rendering.
 - Panel 11's value mapping is a Grafana UI feature, not part of the SQL. Configure `Field overrides → Value mappings`.
 - Panel 7 uses `Bar chart`, not `Time series`, because `pnl_percent` is a discrete per-close value, not a continuous metric.
 - Panel 9 ("Open positions") deliberately reads `trailing_state` rather than synthesising from `closed_positions` — the table directly reflects the live state and updates within one tick.
+- Panel 16 uses Grafana's `Logs` panel type against a SQL source. Configure the field mapping so `body` is the message body and `level` drives row coloring. The `jsonb_array_elements` unrolls the per-record JSON written by `_SessionLogCollector` (Step 1.4) into one Grafana row per log line.
+- Panel 13's stacked time series makes a sudden spike in `failed` or `paused` sessions visually obvious — pair it with Panel 14 for the at-a-glance rate.
 
 ### 5.4 Verify the dashboard JSON file
 
@@ -505,7 +738,7 @@ test -f grafana/dashboards/botc.json
 python -c "import json; json.load(open('grafana/dashboards/botc.json'))"
 ```
 
-Both must succeed. The JSON must contain `"uid": "botc-overview"` and at least twelve panel objects.
+Both must succeed. The JSON must contain `"uid": "botc-overview"` and at least sixteen panel objects.
 
 **Commit:** `feat(grafana): provision BoTC Overview dashboard (market + performance + system)`
 
@@ -531,13 +764,16 @@ Add this section to the Infrastructure block, immediately after the database sub
 ```markdown
 ### Observability — Grafana
 
-A pre-provisioned Grafana instance ships with the stack. It runs as a Docker Compose service on `127.0.0.1:3000` and reads from PostgreSQL through a least-privilege `grafana_reader` role (created by Alembic migration `20260512_02`).
+A pre-provisioned Grafana instance ships with the stack. It runs as a Docker Compose service on `127.0.0.1:3000` and reads from PostgreSQL through a least-privilege `grafana_reader` role (created by Alembic migration `20260512_01`).
 
 **What is on the default dashboard (`BoTC Overview`):**
 
 - Market: close price and ATR per pair, latest close
 - Performance: total closed positions, cumulative PnL %, win/loss ratio, per-close PnL, cumulative PnL over time, open positions table
-- System: seconds since last scheduler heartbeat (thresholded), paused/running state, OHLC ingestion rate
+- System: seconds since last successful session (thresholded), paused/running state, OHLC ingestion rate
+- Sessions: sessions per hour by status, 24h failure rate, recent sessions table, last session log
+
+Every scheduler tick writes one row to the `sessions` table (also created by migration `20260512_01`) capturing start/end timestamps, completion status, the balance snapshot, per-pair market data (price/ATR/volatility level), and the log lines emitted during the session — these power the Sessions row of the dashboard.
 
 **Provisioning:**
 
@@ -607,7 +843,7 @@ curl -s http://localhost:3000/api/dashboards/uid/botc-overview | jq '.dashboard.
 # "BoTC Overview"
 ```
 
-Open `http://localhost:3000` in a browser. The `BoTC Overview` dashboard should render. With one full session under the bot's belt, panel 10 ("Seconds since last heartbeat") must show a value < `SLEEPING_INTERVAL + 30`.
+Open `http://localhost:3000` in a browser. The `BoTC Overview` dashboard should render. With one full session under the bot's belt, panel 10 ("Seconds since last successful session") must show a value < `SLEEPING_INTERVAL + 30`, and Row 4 must show at least one row in "Recent sessions" with `status = ok` and a populated log preview.
 
 ### 7.3 Persistence smoke test
 
@@ -635,8 +871,8 @@ docker compose down
 
 Each bullet is one focused commit. Run `pytest tests/unit` inside Docker after each commit.
 
-1. `feat(scheduler): write last_heartbeat to bot_control after each session`
-2. `feat(db): add grafana_reader role migration and integration test`
+1. `feat(observability): sessions table, per-session telemetry, and grafana_reader role`
+2. `test(db): grafana_reader integration test and CI wiring`
 3. `feat(compose): add grafana service with named volume and provisioning mounts`
 4. `feat(grafana): provision PostgreSQL datasource via filesystem`
 5. `feat(grafana): provision BoTC Overview dashboard (market + performance + system)`
@@ -650,23 +886,24 @@ The PR can be opened after commit 6. The dashboard screenshot may land as a foll
 
 Run all of these before opening the PR:
 
-- [ ] `grep -rn "last_heartbeat" core/` returns at least one match in `core/scheduler.py`.
-- [ ] `docker compose -f docker-compose.test.yml run --rm test pytest tests/unit/core/test_scheduler.py -v` passes.
-- [ ] `scripts/migrations/versions/20260512_02_*.py` exists, declares `down_revision = "20260414_01"`, and the body matches the spec in Step 2.1.
+- [ ] `grep -rn "create_session\|finalize_session" core/` returns matches in `core/scheduler.py` and `core/database.py`.
+- [ ] `docker compose -f docker-compose.test.yml run --rm test pytest tests/unit/core/test_scheduler.py -v` passes (all three session-recording tests).
+- [ ] `scripts/migrations/versions/20260512_01_phase8_observability.py` exists, declares `down_revision = "20260414_01"`, creates the `sessions` table, and includes `sessions` in `GRAFANA_TABLES` per Step 1.2.
 - [ ] `docker compose -f docker-compose.test.yml run --rm -e POSTGRES_PASSWORD=botc -e GRAFANA_DB_PASSWORD=ci_grafana_password test alembic upgrade head` exits `0`.
-- [ ] `docker compose -f docker-compose.test.yml run --rm -e POSTGRES_PASSWORD=botc -e GRAFANA_DB_PASSWORD=ci_grafana_password -e RUN_DB_INTEGRATION=true test pytest tests/integration/test_grafana_role.py -v` passes both tests.
+- [ ] `docker compose -f docker-compose.test.yml run --rm -e POSTGRES_PASSWORD=botc -e GRAFANA_DB_PASSWORD=ci_grafana_password -e RUN_DB_INTEGRATION=true test pytest tests/integration/test_grafana_role.py -v` passes both tests (the `SELECT 1 FROM sessions` case included).
 - [ ] `docker compose -f docker-compose.yml config | grep -A1 "container_name: botc-grafana"` shows the grafana service.
 - [ ] `docker compose -f docker-compose.yml -f docker-compose.prod.yml config` still parses cleanly (grafana inherits unchanged).
 - [ ] `grafana/provisioning/datasources/postgres.yaml` references `uid: botc-postgres` and `user: grafana_reader`.
 - [ ] `grafana/provisioning/dashboards/botc.yaml` has `allowUiUpdates: false`.
-- [ ] `python -c "import json; d = json.load(open('grafana/dashboards/botc.json')); assert d['uid'] == 'botc-overview'; assert len(d['panels']) >= 12"` exits `0`.
+- [ ] `python -c "import json; d = json.load(open('grafana/dashboards/botc.json')); assert d['uid'] == 'botc-overview'; assert len(d['panels']) >= 16"` exits `0`.
 - [ ] `.env.example` documents `GRAFANA_DB_PASSWORD`, `GF_SECURITY_ADMIN_USER`, `GF_SECURITY_ADMIN_PASSWORD`.
 - [ ] `.github/workflows/ci.yml` integration job passes `GRAFANA_DB_PASSWORD=ci_grafana_password` to both the migration step and the test step.
 - [ ] `docker compose up -d` followed by 90s wait then `curl http://localhost:3000/api/health` returns `200`.
 - [ ] `curl http://localhost:3000/api/dashboards/uid/botc-overview | jq -r '.dashboard.title'` returns `BoTC Overview`.
-- [ ] After one full scheduler session, panel 10's underlying query (`SELECT EXTRACT(EPOCH FROM (now() - (control_value::timestamptz))) FROM bot_control WHERE control_key = 'last_heartbeat'`) returns a value below `SLEEPING_INTERVAL + 30`.
+- [ ] After one full scheduler session, `SELECT status, balance IS NOT NULL AS has_balance, jsonb_array_length(log_messages) > 0 AS has_logs FROM sessions ORDER BY id DESC LIMIT 1;` returns `('ok', true, true)`.
+- [ ] After one full scheduler session, panel 10's query (`SELECT EXTRACT(EPOCH FROM (now() - MAX(ended_at))) FROM sessions WHERE status = 'ok'`) returns a value below `SLEEPING_INTERVAL + 30`.
 - [ ] `docker compose restart grafana` followed by re-reading the dashboard returns the same `BoTC Overview` payload (proves provisioning re-applies).
-- [ ] `README.md` has an Observability — Grafana section listing the three provisioning files and the screenshot reference (screenshot file may be a follow-up commit).
+- [ ] `README.md` has an Observability — Grafana section listing the three provisioning files, the `sessions` table, and the screenshot reference (screenshot file may be a follow-up commit).
 
 ---
 
@@ -675,12 +912,13 @@ Run all of these before opening the PR:
 Explicitly out of scope — do not add any of these:
 
 - **Alerting** (Grafana alerts, contact points, notification policies). Telegram already covers operational notifications; duplicating them through Grafana is a later concern.
-- **Loki, Prometheus, OpenTelemetry, or any new metrics/logs pipeline.** The four existing Postgres tables plus a single `last_heartbeat` row are the entire observability data surface for Phase 8.
+- **Loki, Prometheus, OpenTelemetry, or any new metrics/logs pipeline.** The four existing Postgres tables plus the new `sessions` table are the entire observability data surface for Phase 8.
 - **A dedicated error-rate panel.** That would require structured event logging, which is a Phase 8.x or later effort.
 - **Multi-dashboard organisation** (folders, multiple JSON files per pair, per-strategy dashboards). One overview dashboard is enough until there is a second consumer.
 - **Public exposure of the Grafana port.** Bound to `127.0.0.1` only; HTTPS / reverse proxy / SSO are not in scope.
 - **Grafana plugin installation.** `GF_INSTALL_PLUGINS` is explicitly empty.
 - **A CHANGELOG entry** (Phase 9 introduces the changelog).
-- **Migrating the heartbeat to a dedicated metrics table.** `bot_control` already exists with the right shape; introducing a second key/value table for this single signal would be premature.
-- **Refactoring `core/scheduler.py`** beyond appending the heartbeat write at the end of `trading_session()`. The exception-handling audit happened in Phase 6.
-- **A `down`-tested migration.** `downgrade()` is written for completeness but rolling back `20260512_02` on a live system would break Grafana — and that is a deliberate one-way door at this stage.
+- **Per-event tables** (session_events, session_pair_snapshots, etc.). The single `sessions` table with JSONB columns is intentional — one row per tick is the unit of telemetry; finer normalization can come later if a panel needs it.
+- **Structured retention / archival of `sessions`.** Rows accumulate forever in this phase. A retention policy (e.g. drop sessions older than 90 days, or roll old rows into an aggregate table) is a follow-up if the table size becomes a concern.
+- **Refactoring `core/scheduler.py`** beyond the session-tracking changes documented in Step 1.5. The exception-handling audit happened in Phase 6.
+- **A `down`-tested migration.** `downgrade()` is written for completeness, but rolling back `20260512_01` on a live system would drop the `sessions` table and the read-only role together — a deliberate one-way door at this stage.
