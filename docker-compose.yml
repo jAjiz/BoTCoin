@@ -85,8 +85,8 @@ services:
       - "127.0.0.1:3000:3000"
     volumes:
       - gf_data:/var/lib/grafana
-      - ./grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - ./services/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./services/grafana/dashboards:/var/lib/grafana/dashboards:ro
     networks:
       - botc_backend
 
