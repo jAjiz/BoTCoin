@@ -272,7 +272,7 @@ class Session(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     balance: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     pair_data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    log_messages: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    log_messages: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 # ============================================================================
@@ -663,7 +663,7 @@ def finalize_session(
     status: str,
     balance: dict | None,
     pair_data: dict | None,
-    log_messages: list[dict],
+    log_messages: str | None,
 ) -> None:
     with SessionLocal() as s, s.begin():
         s.execute(

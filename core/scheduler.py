@@ -24,20 +24,15 @@ READ_ONLY_RETRY_ATTEMPTS: int = 3
 
 
 class _SessionLogCollector(std_logging.Handler):
-    """Captures records into a list for persistence at session end."""
+    """Captures botc logger records as plain text lines for session persistence."""
 
     def __init__(self) -> None:
         super().__init__(level=std_logging.INFO)
-        self.records: list[dict] = []
+        self.lines: list[str] = []
 
     def emit(self, record: std_logging.LogRecord) -> None:
-        self.records.append(
-            {
-                "ts": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
-                "level": record.levelname,
-                "message": record.getMessage(),
-            }
-        )
+        ts = datetime.fromtimestamp(record.created, tz=UTC).isoformat()
+        self.lines.append(f"{ts} {record.levelname} {record.getMessage()}")
 
 
 def call_with_retry[T](func: Callable[..., T], *args: Any) -> T | None:
@@ -54,8 +49,8 @@ def trading_session() -> None:
     global _session_count
 
     collector = _SessionLogCollector()
-    root = std_logging.getLogger()
-    root.addHandler(collector)
+    botc_logger = std_logging.getLogger("botc")
+    botc_logger.addHandler(collector)
 
     started_at = now_utc()
     session_id = db.create_session(started_at)
@@ -131,12 +126,12 @@ def trading_session() -> None:
         status = "failed"
         raise
     finally:
-        root.removeHandler(collector)
+        botc_logger.removeHandler(collector)
         db.finalize_session(
             session_id=session_id,
             ended_at=now_utc(),
             status=status,
             balance=current_balance,
             pair_data=pair_data,
-            log_messages=collector.records,
+            log_messages="\n".join(collector.lines) or None,
         )

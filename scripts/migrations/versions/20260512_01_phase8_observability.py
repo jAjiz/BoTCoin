@@ -35,7 +35,7 @@ def upgrade() -> None:
         sa.Column("status", sa.String(16), nullable=False),
         sa.Column("balance", JSONB, nullable=True),
         sa.Column("pair_data", JSONB, nullable=True),
-        sa.Column("log_messages", JSONB, nullable=True),
+        sa.Column("log_messages", sa.Text, nullable=True),
     )
     op.create_index("ix_sessions_started_at", "sessions", ["started_at"], unique=False)
 

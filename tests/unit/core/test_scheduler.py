@@ -30,7 +30,7 @@ def test_trading_session_records_successful_session(monkeypatch):
     assert final["status"] == "completed"
     assert final["balance"] == {"EUR": "100"}
     assert final["pair_data"] == {}
-    assert any("SESSION COMPLETE" in m["message"] for m in final["log_messages"])
+    assert "SESSION COMPLETE" in final["log_messages"]
 
 
 def test_trading_session_records_paused_session(monkeypatch):
@@ -55,4 +55,4 @@ def test_trading_session_records_failed_balance_fetch(monkeypatch):
 
     assert calls[0]["status"] == "failed"
     assert calls[0]["balance"] is None
-    assert any("Could not fetch balance" in m["message"] for m in calls[0]["log_messages"])
+    assert "Could not fetch balance" in calls[0]["log_messages"]
