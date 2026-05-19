@@ -12,16 +12,40 @@
   "links": [],
   "panels": [
     {
+      "datasource": { "type": "postgres", "uid": "botc-postgres" },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "options": { "0": { "color": "green", "text": "RUNNING" }, "1": { "color": "red", "text": "PAUSED" } }, "type": "value" }
+          ]
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+      "id": 1,
+      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "botc-postgres" },
+          "format": "table",
+          "rawSql": "SELECT (control_value = 'true')::int FROM bot_control WHERE control_key = 'bot_paused'",
+          "refId": "A"
+        }
+      ],
+      "title": "Bot status",
+      "type": "stat"
+    },
+    {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 4 },
       "id": 101,
       "title": "Market Metrics",
       "type": "row"
     },
     {
       "datasource": { "type": "postgres", "uid": "botc-postgres" },
-      "fieldConfig": { "defaults": {}, "overrides": [] },
-      "gridPos": { "h": 10, "w": 16, "x": 0, "y": 1 },
+      "fieldConfig": { "defaults": { "unit": "locale", "decimals": 1 }, "overrides": [] },
+      "gridPos": { "h": 10, "w": 16, "x": 0, "y": 5 },
       "id": 3,
       "options": {
         "mode": "candles",
@@ -44,10 +68,10 @@
     {
       "datasource": { "type": "postgres", "uid": "botc-postgres" },
       "fieldConfig": {
-        "defaults": { "custom": { "lineWidth": 2 } },
+        "defaults": { "unit": "locale", "decimals": 1, "custom": { "lineWidth": 2 } },
         "overrides": []
       },
-      "gridPos": { "h": 10, "w": 8, "x": 16, "y": 1 },
+      "gridPos": { "h": 10, "w": 8, "x": 16, "y": 5 },
       "id": 4,
       "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "single" } },
       "targets": [
@@ -63,8 +87,19 @@
     },
     {
       "datasource": { "type": "postgres", "uid": "botc-postgres" },
-      "fieldConfig": { "defaults": {}, "overrides": [] },
-      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 11 },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": ".*price.*" },
+            "properties": [
+              { "id": "unit", "value": "locale" },
+              { "id": "decimals", "value": 1 }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 15 },
       "id": 5,
       "options": { "footer": { "show": false }, "showHeader": true },
       "targets": [
@@ -80,115 +115,117 @@
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 17 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 21 },
       "id": 102,
       "title": "Performance Metrics",
       "type": "row"
     },
     {
       "datasource": { "type": "postgres", "uid": "botc-postgres" },
-      "fieldConfig": { "defaults": {}, "overrides": [] },
-      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 18 },
-      "id": 6,
-      "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
+      "fieldConfig": {
+        "defaults": { "unit": "percent", "custom": { "lineWidth": 2 } },
+        "overrides": []
+      },
+      "gridPos": { "h": 18, "w": 12, "x": 0, "y": 22 },
+      "id": 8,
+      "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "single" } },
       "targets": [
         {
           "datasource": { "type": "postgres", "uid": "botc-postgres" },
           "format": "table",
-          "rawSql": "SELECT COUNT(*) AS total FROM closed_positions WHERE pair = '$pair'",
+          "rawSql": "SELECT closed_at AS time, SUM(pnl_percent::float8) OVER (ORDER BY closed_at) AS cumulative_pnl FROM closed_positions WHERE pair = '$pair' ORDER BY closed_at",
           "refId": "A"
         }
       ],
-      "title": "Total closed positions",
-      "type": "stat"
-    },
-    {
-      "datasource": { "type": "postgres", "uid": "botc-postgres" },
-      "fieldConfig": { "defaults": {}, "overrides": [] },
-      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 18 },
-      "id": 7,
-      "options": { "colorMode": "value", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
-      "targets": [
-        {
-          "datasource": { "type": "postgres", "uid": "botc-postgres" },
-          "format": "table",
-          "rawSql": "SELECT COALESCE(SUM(CASE WHEN pnl_percent > 0 THEN 1.0 ELSE 0.0 END) / NULLIF(SUM(CASE WHEN pnl_percent <= 0 THEN 1.0 ELSE 0.0 END), 0), 0.0)::float8 AS win_loss_ratio FROM closed_positions WHERE pair = '$pair'",
-          "refId": "A"
-        }
-      ],
-      "title": "Win/loss ratio",
-      "type": "stat"
+      "title": "Cumulative PnL",
+      "type": "timeseries"
     },
     {
       "datasource": { "type": "postgres", "uid": "botc-postgres" },
       "fieldConfig": {
-        "defaults": { "unit": "percent", "custom": { "lineWidth": 2 } },
+        "defaults": { "unit": "percent", "custom": { "drawStyle": "bars", "lineWidth": 0, "fillOpacity": 80 } },
         "overrides": [
           {
-            "matcher": { "id": "byName", "options": "pnl_per_close" },
+            "matcher": { "id": "byName", "options": "gain" },
             "properties": [
-              { "id": "custom.drawStyle", "value": "bars" },
-              { "id": "custom.lineWidth", "value": 0 },
-              { "id": "custom.fillOpacity", "value": 80 }
+              { "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "loss" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }
             ]
           }
         ]
       },
-      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 22 },
-      "id": 8,
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 22 },
+      "id": 14,
       "options": { "legend": { "calcs": [], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi" } },
       "targets": [
         {
           "datasource": { "type": "postgres", "uid": "botc-postgres" },
           "format": "table",
-          "rawSql": "SELECT closed_at AS time, pnl_percent::float8 AS pnl_per_close FROM closed_positions WHERE pair = '$pair' ORDER BY closed_at",
+          "rawSql": "SELECT closed_at AS time, CASE WHEN pnl_percent >= 0 THEN pnl_percent::float8 END AS gain FROM closed_positions WHERE pair = '$pair' AND $__timeFilter(closed_at) ORDER BY closed_at",
           "refId": "A"
         },
         {
           "datasource": { "type": "postgres", "uid": "botc-postgres" },
           "format": "table",
-          "rawSql": "SELECT closed_at AS time, SUM(pnl_percent::float8) OVER (ORDER BY closed_at) AS cumulative_pnl FROM closed_positions WHERE pair = '$pair' ORDER BY closed_at",
+          "rawSql": "SELECT closed_at AS time, CASE WHEN pnl_percent < 0 THEN pnl_percent::float8 END AS loss FROM closed_positions WHERE pair = '$pair' AND $__timeFilter(closed_at) ORDER BY closed_at",
           "refId": "B"
         }
       ],
-      "title": "PnL",
+      "title": "PnL per close",
       "type": "timeseries"
     },
     {
+      "datasource": { "type": "postgres", "uid": "botc-postgres" },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": { "id": "byRegexp", "options": ".*price.*" },
+            "properties": [
+              { "id": "unit", "value": "locale" },
+              { "id": "decimals", "value": 1 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "pnl_percent" },
+            "properties": [
+              { "id": "unit", "value": "percent" },
+              { "id": "thresholds", "value": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 0 }] } },
+              { "id": "custom.displayMode", "value": "color-text" }
+            ]
+          }
+        ]
+      },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 31 },
+      "id": 13,
+      "options": { "footer": { "show": false }, "showHeader": true },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "botc-postgres" },
+          "format": "table",
+          "rawSql": "SELECT closed_at, side, entry_price::float8, closing_price::float8, pnl_percent::float8 FROM closed_positions WHERE pair = '$pair' AND $__timeFilter(closed_at) ORDER BY closed_at DESC",
+          "refId": "A"
+        }
+      ],
+      "title": "Closed positions",
+      "type": "table"
+    },
+    {
       "collapsed": false,
-      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 32 },
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 40 },
       "id": 103,
       "title": "Sessions",
       "type": "row"
     },
     {
       "datasource": { "type": "postgres", "uid": "botc-postgres" },
-      "fieldConfig": {
-        "defaults": {
-          "mappings": [
-            { "options": { "0": { "color": "green", "text": "RUNNING" }, "1": { "color": "red", "text": "PAUSED" } }, "type": "value" }
-          ]
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 33 },
-      "id": 1,
-      "options": { "colorMode": "background", "graphMode": "none", "justifyMode": "auto", "orientation": "auto", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }, "textMode": "auto" },
-      "targets": [
-        {
-          "datasource": { "type": "postgres", "uid": "botc-postgres" },
-          "format": "table",
-          "rawSql": "SELECT (control_value = 'true')::int FROM bot_control WHERE control_key = 'bot_paused'",
-          "refId": "A"
-        }
-      ],
-      "title": "Bot status",
-      "type": "stat"
-    },
-    {
-      "datasource": { "type": "postgres", "uid": "botc-postgres" },
       "fieldConfig": { "defaults": {}, "overrides": [] },
-      "gridPos": { "h": 8, "w": 8, "x": 4, "y": 33 },
+      "gridPos": { "h": 8, "w": 8, "x": 4, "y": 41 },
       "id": 10,
       "options": { "barWidth": 0.6, "fillOpacity": 80, "groupWidth": 0.7, "legend": { "calcs": [], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "single" }, "xField": "status" },
       "targets": [
@@ -205,7 +242,7 @@
     {
       "datasource": { "type": "postgres", "uid": "botc-postgres" },
       "fieldConfig": { "defaults": {}, "overrides": [] },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 33 },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 41 },
       "id": 11,
       "options": { "footer": { "show": false }, "showHeader": true },
       "targets": [
@@ -222,7 +259,7 @@
     {
       "datasource": { "type": "postgres", "uid": "botc-postgres" },
       "fieldConfig": { "defaults": {}, "overrides": [] },
-      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 41 },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 49 },
       "id": 12,
       "options": { "footer": { "show": false }, "showHeader": true },
       "targets": [
