@@ -225,11 +225,11 @@ Every scheduler tick writes one row to the `sessions` table (also created by mig
 
 **Provisioning:**
 
-- `grafana/provisioning/datasources/postgres.yaml` — datasource (read-only, uid `botc-postgres`)
-- `grafana/provisioning/dashboards/botc.yaml` — dashboard provider config
-- `grafana/dashboards/botc.json` — the dashboard payload (committed to the repo)
+- `services/grafana/provisioning/datasources/postgres.yaml` — datasource (read-only, uid `botc-postgres`)
+- `services/grafana/provisioning/dashboards/botc.yaml` — dashboard provider config
+- `services/grafana/dashboards/botc.json` — the dashboard payload (committed to the repo)
 
-The dashboard is the source of truth in the repo. To edit it, open the UI, save as a new dashboard, then `Share → Export → Save to file` and replace `grafana/dashboards/botc.json`. UI updates to the provisioned dashboard are disabled (`allowUiUpdates: false`) so changes cannot drift silently.
+The dashboard is the source of truth in the repo. To edit it, open the UI, save as a new dashboard, then `Share → Export → Save to file` and replace `services/grafana/dashboards/botc.json`. UI updates to the provisioned dashboard are disabled (`allowUiUpdates: false`) so changes cannot drift silently.
 
 ## 🔌 Exchange Integration
 
