@@ -24,7 +24,7 @@ READ_ONLY_RETRY_ATTEMPTS: int = 3
 
 
 class _SessionLogCollector(std_logging.Handler):
-    """Captures botc logger records as plain text lines for session persistence."""
+    """Captures application logger records as plain text lines for session persistence."""
 
     def __init__(self) -> None:
         super().__init__(level=std_logging.INFO)
@@ -49,16 +49,17 @@ def trading_session() -> None:
     global _session_count
 
     collector = _SessionLogCollector()
-    botc_logger = std_logging.getLogger("botc")
-    botc_logger.addHandler(collector)
+    app_logger = std_logging.getLogger("botc")
+    app_logger.addHandler(collector)
 
-    started_at = now_utc()
-    session_id = db.create_session(started_at)
+    session_id: int | None = None
     status = "failed"  # overwritten on success / paused
     current_balance: dict | None = None
     pair_data: dict[str, dict] = {}
 
     try:
+        session_id = db.create_session(now_utc())
+
         if db.get_bot_paused():
             logging.info("Bot is paused. Skipping session.\n")
             status = "paused"
@@ -126,12 +127,13 @@ def trading_session() -> None:
         status = "failed"
         raise
     finally:
-        botc_logger.removeHandler(collector)
-        db.finalize_session(
-            session_id=session_id,
-            ended_at=now_utc(),
-            status=status,
-            balance=current_balance,
-            pair_data=pair_data,
-            log_messages="\n".join(collector.lines) or None,
-        )
+        app_logger.removeHandler(collector)
+        if session_id is not None:
+            db.finalize_session(
+                session_id=session_id,
+                ended_at=now_utc(),
+                status=status,
+                balance=current_balance,
+                pair_data=pair_data,
+                log_messages="\n".join(collector.lines) or None,
+            )

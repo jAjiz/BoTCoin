@@ -26,8 +26,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.orm import Mapped, declarative_base, mapped_column, sessionmaker
-from sqlalchemy.orm import Session as SASession
+from sqlalchemy.orm import Session, declarative_base, sessionmaker
 from sqlalchemy.pool import QueuePool
 
 from core.config import (
@@ -263,18 +262,18 @@ class BotControl(Base):
         }
 
 
-class Session(Base):
+class SessionRecord(Base):
     """Per-scheduler-tick session telemetry."""
 
     __tablename__ = "sessions"
 
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
-    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    status: Mapped[str] = mapped_column(String(16), nullable=False)
-    balance: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    pair_data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    log_messages: Mapped[str | None] = mapped_column(Text, nullable=True)
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    started_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    ended_at = Column(DateTime(timezone=True), nullable=True)
+    status = Column(String(16), nullable=False)
+    balance = Column(JSONB, nullable=True)
+    pair_data = Column(JSONB, nullable=True)
+    log_messages = Column(Text, nullable=True)
 
 
 # ============================================================================
@@ -283,7 +282,7 @@ class Session(Base):
 
 
 @contextmanager
-def get_session() -> Iterator[SASession]:
+def get_session() -> Iterator[Session]:
     """Context manager for database sessions."""
     session = SessionLocal()
     try:
@@ -661,10 +660,10 @@ def set_bot_paused(paused: bool, updated_by: str | None = None) -> None:
 
 
 def create_session(started_at: datetime) -> int:
-    with SessionLocal() as s, s.begin():
-        row = Session(started_at=started_at, status="running")
-        s.add(row)
-        s.flush()
+    with get_session() as session:
+        row = SessionRecord(started_at=started_at, status="running")
+        session.add(row)
+        session.flush()
         return row.id
 
 
@@ -676,10 +675,10 @@ def finalize_session(
     pair_data: dict | None,
     log_messages: str | None,
 ) -> None:
-    with SessionLocal() as s, s.begin():
-        s.execute(
-            update(Session)
-            .where(Session.id == session_id)
+    with get_session() as session:
+        session.execute(
+            update(SessionRecord)
+            .where(SessionRecord.id == session_id)
             .values(
                 ended_at=ended_at,
                 status=status,
