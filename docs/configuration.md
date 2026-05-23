@@ -10,7 +10,7 @@ Set automatically by Docker Compose via `docker-compose.yml`. Override only when
 
 | Variable | Default | Effect |
 |---|---|---|
-| `API_BASE_URL` | `http://botc:8000` | Base URL the `telegram` service uses to reach the `botc` API |
+| `API_BASE_URL` | `http://localhost:8000` | Base URL the `telegram` service uses to reach the `botc` API (Docker Compose sets `http://botc:8000`) |
 | `TELEGRAM_SERVICE_URL` | `http://telegram:8001` | URL `core/logging.py` posts `to_telegram=True` messages to |
 
 ---
@@ -31,7 +31,7 @@ Set automatically by Docker Compose via `docker-compose.yml`. Override only when
 | `TELEGRAM_TOKEN` | yes | — | Bot token from @BotFather |
 | `TELEGRAM_USER_ID` | yes | — | Your numeric Telegram user ID; commands from any other user are silently ignored |
 | `TELEGRAM_ENABLED` | no | `true` | Set to `false` to start the stack without Telegram (useful in dev; `telegram` service still starts but sends no messages) |
-| `TELEGRAM_POLL_INTERVAL` | no | `10` | Seconds between PTB long-poll requests |
+| `TELEGRAM_POLL_INTERVAL` | no | `0` | Seconds between PTB long-poll requests (`.env.example` ships `10`) |
 
 ---
 

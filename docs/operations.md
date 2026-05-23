@@ -85,9 +85,9 @@ mkdir -p ~/BoTC
 # Place .env at ~/BoTC/.env (scp, paste from password manager, etc.)
 
 COMMIT_SHA=$(git rev-parse HEAD)   # or the target commit SHA
-curl -fsSL "https://raw.githubusercontent.com/jAjiz/BoTC/${COMMIT_SHA}/docker-compose.yml" \
+curl -fsSL "https://raw.githubusercontent.com/jAjiz/BoTCoin/${COMMIT_SHA}/docker-compose.yml" \
   -o ~/BoTC/docker-compose.yml
-curl -fsSL "https://raw.githubusercontent.com/jAjiz/BoTC/${COMMIT_SHA}/docker-compose.prod.yml" \
+curl -fsSL "https://raw.githubusercontent.com/jAjiz/BoTCoin/${COMMIT_SHA}/docker-compose.prod.yml" \
   -o ~/BoTC/docker-compose.prod.yml
 
 cd ~/BoTC
@@ -144,7 +144,7 @@ To edit the dashboard: make changes in the UI, use `Share → Export → Save to
 | Endpoint | Response |
 |---|---|
 | `GET /health` | `200 OK` when the service is up |
-| `GET /status` | JSON: `paused`, `last_run_at`, per-pair market snapshot |
+| `GET /status` | JSON: `paused`, `last_run_at` |
 
 ---
 
