@@ -1,7 +1,6 @@
 # Changelog
 
-All notable changes to BoTCoin V2 are documented in this file.  
-V1 history is not retroactively documented. This changelog tracks changes from the V2 milestone onwards.
+All notable changes to BoTCoin are documented in this file.
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
@@ -138,3 +137,9 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - `.github/agents/`, `.github/instructions/`, `.github/skills/` infrastructure
 - Awesome-Copilot agents, instructions, and skills for architectural consistency and accelerated delivery
 - `CLAUDE.md` documenting project architecture, design choices, and collaboration conventions for AI-assisted development
+
+---
+
+## [1.0.0] – BoTCoin V1
+
+Functional, modular trading bot with clean separation of concerns across `core/`, `exchange/`, `trading/`, and `services/`. Ran an unmanaged `while True` loop, persisted state and history as JSON and CSV flat files, and exposed a Telegram interface directly in-process. No linter, no CI test gate, no structured persistence layer. V2 was started to address these gaps; V1 changes are not retroactively documented.

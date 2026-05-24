@@ -58,19 +58,18 @@ docker compose down                # stop all services
 
 ## Key engineering decisions
 
-Each decision links to its execution plan — the plan files are the architectural record for this project.
+Each decision links to its phase in the roadmap — execution plans and design rationale are linked from there.
 
-| Phase | Decision | Plan |
+| Technology | Decision | Reference |
 |---|---|---|
-| 1 – Docker | Single image, multi-service Compose; no host Python required | — |
-| 2 – APScheduler | `AsyncIOScheduler` in the FastAPI `lifespan`; `max_instances=1` prevents overlapping ticks | — |
-| 3 – Testing | Two-tier pytest (unit + integration) runs entirely inside Docker for production parity | — |
-| 4 – PostgreSQL | Synchronous SQLAlchemy under async FastAPI; module-level DAL instead of a repository class | — |
-| 5 – FastAPI | `botc` and `telegram` split into two services so Telegram's long-poll lifecycle cannot stall the trading loop | [plan/phase-5-fastapi.md](plan/phase-5-fastapi.md) |
-| 6 – ruff | Single tool for lint + format + import sorting; `pyproject.toml` as the single config source | [plan/phase-6-code-quality.md](plan/phase-6-code-quality.md) |
-| 7 – CI/CD | GHCR image-based deploy; VPS holds only `.env` + two compose files, no source clone | [plan/phase-7-cicd.md](plan/phase-7-cicd.md) |
-| 8 – Grafana | Per-session `sessions` table + filesystem-provisioned dashboard; SQL-native, no Loki / Prometheus | [plan/phase-8-grafana.md](plan/phase-8-grafana.md) |
-| 9 – Docs | README as engineering cover letter; reference docs extracted to `docs/`; plan files kept as the architectural record | [plan/phase-9-project-documentation.md](plan/phase-9-project-documentation.md) |
+| Docker | Single image, multi-service Compose; no host Python required | [Roadmap](ROADMAP.md#phase-1--infrastructure-first-docker-completed) |
+| APScheduler | `AsyncIOScheduler` in the FastAPI `lifespan`; `max_instances=1` prevents overlapping ticks | [Roadmap](ROADMAP.md#phase-2--managed-execution-apscheduler-completed) |
+| Testing | Two-tier pytest (unit + integration) runs entirely inside Docker for production parity | [Roadmap](ROADMAP.md#phase-3--testing-strategy-completed) |
+| PostgreSQL | Synchronous SQLAlchemy under async FastAPI; module-level DAL instead of a repository class | [Roadmap](ROADMAP.md#phase-4--professional-persistence-postgresql-completed) |
+| FastAPI | `botc` and `telegram` split into two services so Telegram's long-poll lifecycle cannot stall the trading loop | [Roadmap](ROADMAP.md#phase-5--rest-api-layer-fastapi-completed) |
+| ruff | Single tool for lint + format + import sorting; `pyproject.toml` as the single config source | [Roadmap](ROADMAP.md#phase-6--code-quality-linting--type-safety-completed) |
+| CI/CD | GHCR image-based deploy; VPS holds only `.env` + two compose files, no source clone | [Roadmap](ROADMAP.md#phase-7--cicd-pipeline) |
+| Grafana | Per-session `sessions` table + filesystem-provisioned dashboard; SQL-native, no Loki / Prometheus | [Roadmap](ROADMAP.md#phase-8--observability-grafana-dashboard) |
 
 Full design rationale is in [CLAUDE.md](CLAUDE.md) under **Design choices**.
 
