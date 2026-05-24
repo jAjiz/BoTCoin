@@ -82,6 +82,7 @@ def trading_session() -> None:
         for pair in PAIRS:
             logging.info(f"--- Processing pair: [{pair}] ---")
             trailing_state[pair] = db.load_trailing_state(pair)
+            previous_state = dict(trailing_state[pair]) if trailing_state.get(pair) else None
             current_price = last_prices.get(pair, None)
             current_atr = call_with_retry(get_current_atr, pair)
 
@@ -102,6 +103,9 @@ def trading_session() -> None:
             }
 
             if is_closing_complete(trailing_state.get(pair)):
+                # TODO: save_closed_position and delete_trailing_state are separate
+                # transactions; a crash between them re-detects the close next session
+                # and double-records it. Wrap both in one transaction for idempotency.
                 db.save_closed_position(pair, trailing_state[pair])
                 db.delete_trailing_state(pair)
                 del trailing_state[pair]
@@ -113,10 +117,9 @@ def trading_session() -> None:
             if is_open(trailing_state.get(pair)):
                 tick_position(pair, trailing_state[pair], current_balance, last_prices, current_atr, trailing_state)
 
-            if trailing_state.get(pair):
-                db.save_trailing_state(pair, trailing_state[pair])
-            else:
-                db.delete_trailing_state(pair)
+            current_state = trailing_state.get(pair)
+            if current_state and current_state != previous_state:
+                db.save_trailing_state(pair, current_state)
 
         _session_count += 1
         runtime.update_last_run_at(now_utc())
