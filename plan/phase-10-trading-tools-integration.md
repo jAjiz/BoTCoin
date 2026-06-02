@@ -542,6 +542,80 @@ def run_optimize(req: OptimizerRequest, calibration: dict | None) -> OptimizerRe
 
 ---
 
+## Step 5b — Port `reanchor_activation_price` into the engine
+
+> **Added after review.** The engine shipped in Step 1 is a faithful port of the *old* `backtest.py`, which predates two live features added to `trading/positions_manager.py`: `reanchor_activation_price` and `refresh_position`. Neither was simulated. This step closes the gap for **`reanchor_activation_price`** only — it is pure price/ATR math and ports cleanly. `refresh_position` is intentionally **out of scope**: it re-sizes/drops a position from the live balance + inventory model, which the backtest has no representation of; modeling it is a separate, larger fidelity change.
+
+### Live behavior to reproduce (`positions_manager.py:74-83`)
+
+While a position is **not yet active**, each tick: if the activation price has drifted further from the current price than the expected activation distance, re-anchor the activation price to the current price. It uses the position's stored `activation_atr` (not the live bar ATR) for the distance, and anchors the new activation price off the current price. In `tick_position` it runs **after** the ATR-drift activation recalibration and **before** the activation cross check.
+
+### 5b.1 Add an `activation_distance` helper to `trading/engine.py`
+
+Factor the distance out of `activation_price` so the re-anchor gap check can reuse it:
+
+```python
+def activation_distance(cfg: EngineConfig, side: str, reference_price: float, atr_val: float) -> float:
+    policy = cfg.sell if side == "sell" else cfg.buy
+    k_act = policy.k_act
+    if k_act is not None:
+        return float(k_act) * atr_val
+    k_stop = lookup_k_stop(cfg, side, atr_val) or 0.0
+    return float(k_stop) * atr_val + (policy.min_margin * reference_price)
+
+
+def activation_price(cfg: EngineConfig, side: str, entry_price: float, atr_val: float) -> float:
+    distance = activation_distance(cfg, side, entry_price, atr_val)
+    if side == "sell":
+        return entry_price + distance
+    return entry_price - distance
+```
+
+This is a pure refactor — `activation_price` keeps the same result.
+
+### 5b.2 Track a per-bar price in `simulate_operations`
+
+The live bot evaluates the re-anchor against `current_price` (a single tick price). The bar-based engine uses intrabar extremes (`high`/`low`) for the activation/stop **crosses** — that is a pre-existing backtest convention and is left unchanged. For the re-anchor's "current price" we use the **bar close** (with the same `close → open → midpoint` fallback already used for the first row), as the single-price analog of the live tick. Inside the bar loop, alongside the existing `high`/`low`/`dtime` extraction:
+
+```python
+if "close" in row:
+    price = float(row["close"])
+elif "open" in row:
+    price = float(row["open"])
+else:
+    price = (high + low) / 2.0
+```
+
+### 5b.3 Apply the re-anchor in the not-active branch
+
+In the `if not active:` block, **after** the ATR-drift activation recalibration and **before** the activation cross check, add:
+
+```python
+# Re-anchor activation toward current price if it has drifted too far
+# (mirrors positions_manager.reanchor_activation_price; uses the stored
+# activation_atr, not the current bar ATR).
+exp_dist = activation_distance(cfg, side, price, activation_atr)
+gap = (activation_px - price) if side == "sell" else (price - activation_px)
+if gap > exp_dist:
+    activation_px = activation_price(cfg, side, price, activation_atr)
+```
+
+`activation_px` and `activation_atr` are always set by this point (the `if activation_px is None:` seed runs earlier in the loop body). No rounding is applied — the engine is unrounded throughout; rounding in the live bot is a persistence detail, not a strategy difference.
+
+### 5b.4 Tests
+
+Add to `tests/unit/trading/test_engine.py`:
+
+- `test_reanchor_pulls_activation_toward_price` — a `k_act`-based config where, while inactive, the price drifts away from the activation target by more than the activation distance; assert the position activates (and exits) on a later bar where, **without** re-anchoring, it would not. Build the no-reanchor baseline by asserting the pre-step behavior is different (or by constructing a frame whose only activation path is via the re-anchored, closer target).
+- `test_reanchor_noop_when_within_distance` — a frame where the gap never exceeds the activation distance; assert the operations are identical to the immediate-activation path (re-anchor never fires).
+- Re-confirm the existing behavioral tests still pass (the `k_act=0` immediate-activation tests are unaffected because the gap never exceeds a zero distance before the cross fires).
+
+The Step 1 design constraint still holds: `engine.py` stays a leaf module and reads no globals; `simulate_operations` remains pure.
+
+**Commit:** `feat(engine): port reanchor_activation_price into the simulation`.
+
+---
+
 ## Step 6 — Postgres `optimizer_jobs` table
 
 ### 6.1 SQLAlchemy model
@@ -1084,14 +1158,15 @@ Each bullet is one focused commit. After each, run `pytest tests/unit` and `ruff
 3. `feat(runtime): structural events calibration cache; refactor market_analyzer to library-only`
 4. `feat(backtest): replace CLI with pure run_backtest(req) library entry point`
 5. `feat(optimizer): rename and rewrite as Optuna-based pure run_optimize(req)`
-6. `feat(database): add optimizer_jobs model, DAL helpers, and Alembic migration`
-7. `feat(optimizer): JobStore with multiprocessing.spawn worker, supervisor, and Telegram hooks`
-8. `feat(api): /backtest sync endpoint + /optimizer/jobs async endpoints`
-9. `docs: add Phase 10 trading-tools API to README`
+6. `feat(engine): port reanchor_activation_price into the simulation`
+7. `feat(database): add optimizer_jobs model, DAL helpers, and Alembic migration`
+8. `feat(optimizer): JobStore with multiprocessing.spawn worker, supervisor, and Telegram hooks`
+9. `feat(api): /backtest sync endpoint + /optimizer/jobs async endpoints`
+10. `docs: add Phase 10 trading-tools API to README`
 
 Optional, only if Appendix A's benchmark fails the budget:
 
-10. `perf(engine): JIT-compile simulate_operations core with Numba` (adds `numba==<resolved>` to `requirements.txt` and the coverage exclusion)
+11. `perf(engine): JIT-compile simulate_operations core with Numba` (adds `numba==<resolved>` to `requirements.txt` and the coverage exclusion)
 
 ---
 
