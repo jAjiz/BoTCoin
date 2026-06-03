@@ -56,18 +56,73 @@ docker compose -f docker-compose.test.yml run --rm test ruff format .
 
 The 80 % coverage gate is enforced by `pyproject.toml`.
 
-### Analysis scripts
+### Trading tools — backtest & optimizer
+
+The V1 CLI analysis scripts are now HTTP endpoints on the `botc` service: they run
+in-process against the live calibration cache and never mutate trading state. All
+require the `X-Api-Token` header.
+
+#### Backtest (synchronous)
+
+`POST /backtest` simulates the strategy over stored OHLC and returns the result
+inline (well under a second on 60 days of 15-min data).
 
 ```bash
-# Market structure analysis
-docker compose run --rm botc python trading/market_analyzer.py PAIR=XBTEUR Volatility=ALL SHOW_EVENTS
-
-# Backtest
-docker compose run --rm botc python trading/backtest.py PAIR=XBTEUR FEE_PCT=0.26 START=2025-01-01
-
-# Parameter optimisation
-docker compose run --rm botc python trading/optimize_params.py PAIR=XBTEUR MODE=CONSERVATIVE FEE_PCT=0.26
+curl -X POST http://localhost:8000/backtest \
+  -H "X-Api-Token: $API_SECRET_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"pair":"XBTEUR","fee_pct":0.26}'
 ```
+
+| Field | Default | Meaning |
+|---|---|---|
+| `pair` | — | Required; must be a configured pair (else `400`) |
+| `fee_pct` | `0.0` | Per-side fee as a percentage (e.g. `0.26`) |
+| `start` / `end` | `null` | Optional date slice; recomputes calibration from the slice |
+| `max_ops` | `null` | Cap on simulated operations |
+| `use_live_config` | `false` | Reuse the live bot's cached calibration instead of recomputing |
+
+The response carries a `summary` (op count, win rate, total/avg/median PnL, fees,
+`row_count`, and `source`: `cache` \| `recompute` \| `slice`) plus the full
+`operations` list.
+
+#### Optimizer (asynchronous)
+
+The optimizer is CPU-bound, so it runs in a spawned child process and is polled.
+`POST /optimizer/jobs` returns `202` with a `job_id`; a second submission while one
+is running returns `409`. Results persist to the `optimizer_jobs` table and survive
+restarts (a job interrupted by a restart is marked `failed`, never left `running`).
+Telegram is notified on start, completion, and failure.
+
+```bash
+# Submit
+JOB=$(curl -s -X POST http://localhost:8000/optimizer/jobs \
+  -H "X-Api-Token: $API_SECRET_TOKEN" -H "Content-Type: application/json" \
+  -d '{"pair":"XBTEUR","mode":"AGGRESSIVE","split_method":"BOTH","train_split":0.7,"n_trials":300}' \
+  | jq -r .job_id)
+
+# Poll a single job
+curl -s http://localhost:8000/optimizer/jobs/$JOB -H "X-Api-Token: $API_SECRET_TOKEN" | jq
+
+# List recent jobs
+curl -s "http://localhost:8000/optimizer/jobs?limit=20" -H "X-Api-Token: $API_SECRET_TOKEN" | jq
+```
+
+| Field | Default | Meaning |
+|---|---|---|
+| `pair` | — | Required; must be a configured pair (else `400`) |
+| `mode` | — | `CONSERVATIVE` \| `AGGRESSIVE` \| `CURRENT` |
+| `fee_pct` | `0.0` | Per-side fee percentage |
+| `start` / `end` | `null` | Optional date slice |
+| `train_split` | `1.0` | Train fraction for the train/test split (0.5–1.0) |
+| `split_method` | `RESET` | `RESET` \| `CONTINUE` \| `BOTH` |
+| `min_ops` / `min_test_ops` | `0` | Prune trials below these op counts |
+| `n_trials` | `300` | Optuna TPE trials |
+| `seed` | `42` | Sampler seed |
+
+A completed job's `result` holds the best candidate, its scores, the top candidates,
+and ready-to-paste `.env` lines. Applying them is manual: copy the suggested lines
+into `.env` and redeploy (hot-reload of trading parameters is future work).
 
 ---
 

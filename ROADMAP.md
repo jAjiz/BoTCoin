@@ -348,22 +348,22 @@ Detailed execution plan: [`plan/phase-9-project-documentation.md`](plan/phase-9-
 
 ---
 
-### Phase 10 – Trading Tools Integration: Backtest + Optimizer
+### Phase 10 – Trading Tools Integration: Backtest + Optimizer (Completed)
 
 **Goal:** Fold the V1 analysis scripts (`trading/backtest.py`, `trading/optimize_params.py`) into the FastAPI service as JSON endpoints, eliminating their global-state mutation hazard and making them reusable from any client. Introduce a pure config-as-argument engine, a calibration cache shared across consumers, an Optuna TPE search to replace the exhaustive grid, and a `multiprocessing.spawn` worker with a single-slot lock and Postgres-persisted job state for the long-running optimizer. This phase introduces **no change to live trading behavior** — calibration stays on full history; the auto-lookback window is deferred to Phase 11.
 
 **Scope:**
 
-- [ ] Add `trading/engine.py` — pure simulator with config-as-argument (`PairCalibration`, `EngineConfig`, `simulate_operations`), reading no module-level globals
-- [ ] Add a calibration cache to `core/runtime` (structural events + ATR percentiles); `calculate_trading_parameters` dual-writes it without changing its calculation logic
-- [ ] Refactor `trading/market_analyzer.py` to library-only (drop CLI, drop `print_results`); delete the now-orphaned `print_*` helpers from `core/utils.py`
-- [ ] Replace `trading/backtest.py`'s CLI with `run_backtest(req) -> BacktestResult`; sync endpoint `POST /backtest`
-- [ ] Rename `trading/optimize_params.py` → `trading/optimizer.py`; replace exhaustive grid with Optuna TPE; expose `run_optimize(req, calibration) -> OptimizerResult`
-- [ ] New `optimizer_jobs` Postgres table + Alembic migration; orphan-cleanup hook on FastAPI lifespan startup
-- [ ] New `optimizer/` package: `JobStore` (in-memory single-slot lock + DB persistence), `worker.py` (multiprocessing.spawn entrypoint fed the parent's calibration snapshot), supervisor task scheduled from FastAPI lifespan
-- [ ] Endpoints: `POST /optimizer/jobs` (202 + `job_id`, 409 if busy), `GET /optimizer/jobs/{id}`, `GET /optimizer/jobs`
-- [ ] Telegram notifications on optimizer start, completion, and failure
-- [ ] Pin `optuna` exactly in `requirements.txt`; Numba is an optional, benchmark-gated speedup (Appendix A of the phase plan), not a baseline dependency
+- [x] Add `trading/engine.py` — pure simulator with config-as-argument (`PairCalibration`, `EngineConfig`, `simulate_operations`), reading no module-level globals
+- [x] Add a calibration cache to `core/runtime` (structural events + ATR percentiles); `calculate_trading_parameters` dual-writes it without changing its calculation logic
+- [x] Refactor `trading/market_analyzer.py` to library-only (drop CLI, drop `print_results`); delete the now-orphaned `print_*` helpers from `core/utils.py`
+- [x] Replace `trading/backtest.py`'s CLI with `run_backtest(req) -> BacktestResult`; sync endpoint `POST /backtest`
+- [x] Rename `trading/optimize_params.py` → `trading/optimizer/search.py`; replace exhaustive grid with Optuna TPE; expose `run_optimize(req, calibration) -> OptimizerResult`
+- [x] New `optimizer_jobs` Postgres table + Alembic migration; orphan-cleanup hook on FastAPI lifespan startup
+- [x] New `trading/optimizer/` package: `JobStore` (in-memory single-slot lock + DB persistence) over a `ProcessPoolExecutor` (spawn context), `worker.py` (child entrypoint fed the parent's calibration snapshot), and a one-shot supervisor coroutine launched per job from the route handler
+- [x] Endpoints: `POST /optimizer/jobs` (202 + `job_id`, 409 if busy), `GET /optimizer/jobs/{id}`, `GET /optimizer/jobs`
+- [x] Telegram notifications on optimizer start, completion, and failure
+- [x] Pinned `optuna` exactly in `requirements.txt`; benchmarked the pure-Python engine and **did not adopt** Numba — it stayed within the wall-clock budget, so no compiled LLVM toolchain was added (Appendix A of the phase plan)
 
 Detailed execution plan: [`plan/phase-10-trading-tools-integration.md`](plan/phase-10-trading-tools-integration.md).
 

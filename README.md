@@ -75,6 +75,7 @@ Each decision links to its phase in the roadmap — execution plans and design r
 | ruff | Single tool for lint + format + import sorting; `pyproject.toml` as the single config source | [Roadmap](ROADMAP.md#phase-6--code-quality-linting--type-safety-completed) |
 | CI/CD | GHCR image-based deploy; VPS holds only `.env` + two compose files, no source clone | [Roadmap](ROADMAP.md#phase-7--cicd-pipeline) |
 | Grafana | Per-session `sessions` table + filesystem-provisioned dashboard; SQL-native, no Loki / Prometheus | [Roadmap](ROADMAP.md#phase-8--observability-grafana-dashboard) |
+| Optuna | Backtest & optimizer exposed as API endpoints; the CPU-bound optimizer runs in a spawned child process with a single-slot lock and Postgres-persisted jobs; Optuna TPE replaces the exhaustive grid | [Roadmap](ROADMAP.md#phase-10--trading-tools-integration-backtest--optimizer-completed) |
 
 Full design rationale is in [CLAUDE.md](CLAUDE.md) under **Design choices**.
 
@@ -162,9 +163,9 @@ is_closing_complete()  — Kraken QueryOrders confirms fill
 
 See [ROADMAP.md](ROADMAP.md) for the full phased plan.
 
-The next planned phase:
+**Most recent phase — Phase 10, Trading Tools Integration (completed):** the V1 analysis scripts were folded into the API as JSON endpoints — synchronous `POST /backtest` and an asynchronous `POST /optimizer/jobs` whose CPU-bound search runs in a spawned child process with Postgres-persisted job state. The exhaustive parameter grid was replaced by an Optuna TPE search, and the simulator was extracted into a pure, config-as-argument engine shared by both endpoints. The pure-Python engine met the wall-clock budget, so the optional Numba JIT was evaluated and not adopted — no compiled toolchain in the image.
 
-**Phase 10 – Trading Tools Integration**: fold `backtest.py` and `optimize_params.py` into the API as JSON endpoints (`POST /backtest`, async `POST /optimizer/jobs`) with Postgres-persisted job state, Numba JIT on the simulator core, and Optuna TPE replacing the exhaustive parameter grid. See [ROADMAP.md](ROADMAP.md#phase-10--trading-tools-integration-backtest--optimizer) for scope.
+**Next — Phase 11, Auto-Lookback Window:** replace full-history K_STOP calibration with a per-pair, data-driven lookback window, validated against the new optimizer endpoint. See [ROADMAP.md](ROADMAP.md#phase-11--auto-lookback-window-for-k_stop-calibration) for scope.
 
 ---
 
