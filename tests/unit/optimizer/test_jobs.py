@@ -1,8 +1,8 @@
 """Unit tests for optimizer.jobs.JobStore."""
 
 import asyncio
+import contextlib
 from dataclasses import dataclass
-from queue import Empty
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -121,47 +121,67 @@ def test_finalize_failed_job(monkeypatch) -> None:
     assert store._active is None
 
 
-def test_supervise_drains_after_exit(monkeypatch) -> None:
-    """The supervisor does a final blocking drain after the worker exits.
-    Guards the race where get_nowait() misses a result that is already in the
-    queue feeder thread when is_alive() flips to False."""
+def test_supervise_ok(monkeypatch) -> None:
+    """supervise() calls _finalize with the result when the worker succeeds."""
     store = JobStore()
     completed = {}
+    done = asyncio.Event()
 
-    monkeypatch.setattr(db, "complete_optimizer_job", lambda job_id, result: completed.update({"job_id": job_id}))
+    def _fake_complete(job_id, result):
+        completed["job_id"] = job_id
+        done.set()
 
-    process = MagicMock()
-    process.is_alive.return_value = False
-    process.exitcode = 0
+    monkeypatch.setattr(db, "complete_optimizer_job", _fake_complete)
 
     queue = MagicMock()
-    queue.get_nowait.side_effect = Empty()
-    queue.get.return_value = ("ok", {"scores": {"robust_pnl_pct": 1.0}})
+    queue.get.return_value = ("ok", {"scores": {"robust_pnl_pct": 2.0}})
 
-    active = _ActiveJob(job_id="drain-job", process=process, queue=queue, pair="XBTEUR")
+    active = _ActiveJob(job_id="job-ok", process=_fake_process(), queue=queue, pair="XBTEUR")
     store._active = active
 
-    async def _run_one_tick():
-        await asyncio.sleep(0)
-        active_snap = store._snapshot_active()
-        if active_snap is None:
-            return
-        try:
-            msg = active_snap.queue.get_nowait()
-        except Exception:
-            msg = None
-        if msg is not None:
-            store._finalize(active_snap, *msg)
-            return
-        if not active_snap.process.is_alive():
-            try:
-                kind, payload = active_snap.queue.get(timeout=2.0)
-            except Exception:
-                store._finalize(active_snap, "error", f"worker exited with code {active_snap.process.exitcode}")
-            else:
-                store._finalize(active_snap, kind, payload)
+    async def _run():
+        task = asyncio.create_task(store.supervise())
+        await asyncio.wait_for(done.wait(), timeout=2.0)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
 
-    asyncio.run(_run_one_tick())
+    asyncio.run(_run())
 
-    assert completed.get("job_id") == "drain-job"
+    assert completed["job_id"] == "job-ok"
     assert store._active is None
+    queue.get.assert_called_once()
+
+
+def test_supervise_error(monkeypatch) -> None:
+    """supervise() calls _finalize with error when the worker fails."""
+    store = JobStore()
+    failed = {}
+    done = asyncio.Event()
+
+    def _fake_fail(job_id, error):
+        failed["job_id"] = job_id
+        failed["error"] = error
+        done.set()
+
+    monkeypatch.setattr(db, "fail_optimizer_job", _fake_fail)
+
+    queue = MagicMock()
+    queue.get.return_value = ("error", "boom")
+
+    active = _ActiveJob(job_id="job-err", process=_fake_process(), queue=queue, pair="XBTEUR")
+    store._active = active
+
+    async def _run():
+        task = asyncio.create_task(store.supervise())
+        await asyncio.wait_for(done.wait(), timeout=2.0)
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    asyncio.run(_run())
+
+    assert failed["job_id"] == "job-err"
+    assert "boom" in failed["error"]
+    assert store._active is None
+    queue.get.assert_called_once()
