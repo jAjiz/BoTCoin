@@ -220,7 +220,7 @@ class OptimizerRequest:
     start: str | None = None
     end: str | None = None
     train_split: float = 1.0
-    split_method: str = "RESET"  # "RESET" | "CONTINUE" | "BOTH"
+    split_method: str = "BOTH"  # "RESET" | "CONTINUE" | "BOTH"
     min_ops: int = 0
     min_test_ops: int = 0
     n_trials: int = 300
@@ -232,10 +232,8 @@ class OptimizerResult:
     pair: str
     mode: str
     split_method: str
-    best_candidate: dict  # {k_act, min_margin, stop_pcts: {LL:..., LV:..., ...}}
-    scores: dict  # {in_sample_pnl_pct, train_pnl_pct, test_pnl_pct, robust_pnl_pct}
-    top_candidates: list[dict]  # top 5
-    suggested_env_lines: list[str]
+    top_candidates: list[dict]  # top 5 unique; each has candidate params + scores
+    suggested_env_lines: list[str]  # formatted .env lines for top_candidates[0]
     n_trials_run: int
     n_trials_pruned: int
 
@@ -293,18 +291,26 @@ def _evaluate(
 
 
 def _scores_dict(ev: _Eval) -> dict:
+    def _clean(v: float) -> float | None:
+        return None if v <= -1e17 else v
+
     return {
-        "in_sample_pnl_pct": ev.in_sample.total_pnl,
-        "train_pnl_pct": ev.train.total_pnl,
-        "test_pnl_pct": ev.test.total_pnl,
-        "robust_pnl_pct": ev.robust_pnl,
+        "in_sample_pnl_pct": _clean(ev.in_sample.total_pnl),
+        "train_pnl_pct": _clean(ev.train.total_pnl),
+        "test_pnl_pct": _clean(ev.test.total_pnl),
+        "robust_pnl_pct": _clean(ev.robust_pnl),
     }
 
 
 def run_optimize(req: OptimizerRequest, calibration: dict | None) -> OptimizerResult:
     fee_rate = float(req.fee_pct) / 100.0
 
-    df_full = db.load_ohlc_data(req.pair, CANDLE_TIMEFRAME).dropna(subset=["atr"]).reset_index(drop=True)
+    df_full = (
+        db.load_ohlc_data(req.pair, CANDLE_TIMEFRAME)
+        .dropna(subset=["atr"])
+        .sort_values("time")
+        .reset_index(drop=True)
+    )
     df = df_full
     if req.start:
         df = df[df["dtime"] >= req.start]
@@ -353,14 +359,11 @@ def run_optimize(req: OptimizerRequest, calibration: dict | None) -> OptimizerRe
     if req.mode == "CURRENT":
         cand = _candidate_from_env(req.pair)
         ev = _evaluate(cand, **eval_kwargs)
-        result_dict = {**_candidate_to_dict(cand), **_scores_dict(ev)}
         return OptimizerResult(
             pair=req.pair,
             mode=req.mode,
             split_method=req.split_method,
-            best_candidate=_candidate_to_dict(cand),
-            scores=_scores_dict(ev),
-            top_candidates=[result_dict],
+            top_candidates=[{**_candidate_to_dict(cand), **_scores_dict(ev)}],
             suggested_env_lines=_format_env_lines(req.pair, cand),
             n_trials_run=1,
             n_trials_pruned=0,
@@ -388,7 +391,17 @@ def run_optimize(req: OptimizerRequest, calibration: dict | None) -> OptimizerRe
         raise ValueError("No candidate met the min_ops / min_test_ops constraints")
 
     completed.sort(key=lambda t: t.value, reverse=True)
-    top = completed[:5]
+
+    # Deduplicate: Optuna can revisit the same discrete parameter combination
+    # across trials. Keep only the first (highest-value) occurrence of each.
+    seen_params: set[tuple] = set()
+    unique_completed = []
+    for t in completed:
+        key = tuple(sorted(t.params.items()))
+        if key not in seen_params:
+            seen_params.add(key)
+            unique_completed.append(t)
+    top = unique_completed[:5]
 
     def _trial_dict(t: optuna.trial.FrozenTrial) -> dict:
         cand = _candidate_from_params(t.params, req.mode)
@@ -400,21 +413,12 @@ def run_optimize(req: OptimizerRequest, calibration: dict | None) -> OptimizerRe
             "robust_pnl_pct": t.value,
         }
 
-    best_trial = top[0]
-    best_cand = _candidate_from_params(best_trial.params, req.mode)
-    scores = {
-        "in_sample_pnl_pct": best_trial.user_attrs.get("in_sample_pnl"),
-        "train_pnl_pct": best_trial.user_attrs.get("train_pnl"),
-        "test_pnl_pct": best_trial.user_attrs.get("test_pnl"),
-        "robust_pnl_pct": best_trial.value,
-    }
+    best_cand = _candidate_from_params(top[0].params, req.mode)
 
     return OptimizerResult(
         pair=req.pair,
         mode=req.mode,
         split_method=req.split_method,
-        best_candidate=_candidate_to_dict(best_cand),
-        scores=scores,
         top_candidates=[_trial_dict(t) for t in top],
         suggested_env_lines=_format_env_lines(req.pair, best_cand),
         n_trials_run=len(study.trials),

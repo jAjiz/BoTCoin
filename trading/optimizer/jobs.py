@@ -76,9 +76,12 @@ class JobStore:
         try:
             if kind == "ok":
                 db.complete_optimizer_job(active.job_id, payload)
+                best = (payload.get("top_candidates") or [{}])[0]
+                robust = best.get("robust_pnl_pct")
+                pnl_str = f"{robust:.2f}%" if robust is not None else "n/a"
                 logging.info(
                     f"✅ [Optimizer] Completed for {active.pair} (job={active.job_id}). "
-                    f"Best: pnl={payload['scores'].get('robust_pnl_pct', 0):.2f}%",
+                    f"Best: pnl={pnl_str}",
                     to_telegram=True,
                 )
             else:

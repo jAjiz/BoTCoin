@@ -42,7 +42,7 @@ def calculate_trading_parameters(pair: str, infoLog: bool = True) -> None:
         logging.info(f"Calculating trading parameters for {pair}...")
 
     try:
-        df = db.load_ohlc_data(pair, CANDLE_TIMEFRAME).dropna(subset=["atr"])
+        df = db.load_ohlc_data(pair, CANDLE_TIMEFRAME).dropna(subset=["atr"]).sort_values("time").reset_index(drop=True)
     except Exception as e:
         logging.error(f"Error loading data for {pair}: {e}")
         raise e

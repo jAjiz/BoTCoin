@@ -173,8 +173,8 @@ def simulate_operations(
             vol=first_vol,
             k_stop=float(first_k),
             fee_abs=float(first_fee),
-            pnl_abs=None,
-            pnl_pct=None,
+            pnl_abs=-float(first_fee),
+            pnl_pct=-float(fee_rate) * 100.0,
             cum_pnl=float(cum_pnl),
         )
     )

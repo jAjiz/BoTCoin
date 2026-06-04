@@ -1,0 +1,269 @@
+### BoTCoin API — Phase 10 acceptance smoke tests
+### REST Client for VS Code — run requests top to bottom.
+### The @job_id variable is captured automatically from the optimizer submit response.
+
+@host = http://localhost:8000
+@token = your-api-token-here
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BACKTEST
+# ─────────────────────────────────────────────────────────────────────────────
+
+### [BT-1] Basic backtest — no fee, full history, recompute path
+POST {{host}}/backtest
+X-Api-Token: {{token}}
+Content-Type: application/json
+
+{
+  "pair": "XBTEUR",
+  "fee_pct": 0.0
+}
+
+###
+
+### [BT-2] Backtest with fee — checks fee_abs + pnl_abs in operations
+POST {{host}}/backtest
+X-Api-Token: {{token}}
+Content-Type: application/json
+
+{
+  "pair": "XBTEUR",
+  "fee_pct": 0.4
+}
+
+###
+
+### [BT-3] Backtest using live calibration cache (use_live_config=true)
+### Requires the scheduler to have run calculate_trading_parameters at least once.
+### If the cache is cold, falls through to "recompute" — result is identical data.
+POST {{host}}/backtest
+X-Api-Token: {{token}}
+Content-Type: application/json
+
+{
+  "pair": "XBTEUR",
+  "fee_pct": 0,
+  "use_live_config": true
+}
+
+###
+
+### [BT-4] Date-sliced backtest — forces the "slice" + recompute path
+POST {{host}}/backtest
+X-Api-Token: {{token}}
+Content-Type: application/json
+
+{
+  "pair": "XBTEUR",
+  "fee_pct": 0.4,
+  "start": "2026-05-20",
+  "end": "2026-06-01"
+}
+
+###
+
+### [BT-5] Backtest capped at 10 operations
+POST {{host}}/backtest
+X-Api-Token: {{token}}
+Content-Type: application/json
+
+{
+  "pair": "XBTEUR",
+  "fee_pct": 0.4,
+  "max_ops": 10
+}
+
+###
+
+### [BT-6] ETHEUR pair
+POST {{host}}/backtest
+X-Api-Token: {{token}}
+Content-Type: application/json
+
+{
+  "pair": "ETHEUR",
+  "fee_pct": 0.4
+}
+
+###
+
+### [BT-7] Unknown pair → 400
+POST {{host}}/backtest
+X-Api-Token: {{token}}
+Content-Type: application/json
+
+{
+  "pair": "DOGEEUR"
+}
+
+###
+
+### [BT-8] No auth → 401 (or 403 depending on middleware)
+POST {{host}}/backtest
+Content-Type: application/json
+
+{
+  "pair": "XBTEUR"
+}
+
+###
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OPTIMIZER — submit
+# ─────────────────────────────────────────────────────────────────────────────
+
+### [OPT-1] Submit optimizer job — AGGRESSIVE mode, low n_trials for quick smoke
+# @name submitJob
+POST {{host}}/optimizer/jobs
+X-Api-Token: {{token}}
+Content-Type: application/json
+
+{
+  "pair": "XBTEUR",
+  "mode": "AGGRESSIVE",
+  "fee_pct": 0.4,
+  "split_method": "BOTH",
+  "train_split": 0.8,
+  "n_trials": 300,
+  "seed": 42
+}
+
+###
+
+@job_id = {{submitJob.response.body.job_id}}
+
+### [OPT-2] Poll job status (run repeatedly until status != "running")
+GET {{host}}/optimizer/jobs/{{job_id}}
+X-Api-Token: {{token}}
+
+###
+
+### [OPT-3] Submit while [OPT-1] is still running → 409 Conflict
+POST {{host}}/optimizer/jobs
+X-Api-Token: {{token}}
+Content-Type: application/json
+
+{
+  "pair": "XBTEUR",
+  "mode": "CURRENT",
+  "split_method": "RESET",
+  "n_trials": 1
+}
+
+###
+
+### [OPT-4] List all jobs (default limit=20)
+GET {{host}}/optimizer/jobs
+X-Api-Token: {{token}}
+
+###
+
+### [OPT-5] List with explicit limit
+GET {{host}}/optimizer/jobs?limit=5
+X-Api-Token: {{token}}
+
+###
+
+### [OPT-6] Get unknown job → 404
+GET {{host}}/optimizer/jobs/00000000-0000-0000-0000-000000000000
+X-Api-Token: {{token}}
+
+###
+
+### [OPT-7] CONSERVATIVE mode
+POST {{host}}/optimizer/jobs
+X-Api-Token: {{token}}
+Content-Type: application/json
+
+{
+  "pair": "XBTEUR",
+  "mode": "CONSERVATIVE",
+  "fee_pct": 0.4,
+  "split_method": "RESET",
+  "train_split": 0.8,
+  "n_trials": 30,
+  "seed": 7
+}
+
+###
+
+### [OPT-8] CURRENT mode — evaluates the live .env config, returns 1 trial
+POST {{host}}/optimizer/jobs
+X-Api-Token: {{token}}
+Content-Type: application/json
+
+{
+  "pair": "XBTEUR",
+  "mode": "CURRENT",
+  "fee_pct": 0.4,
+  "split_method": "RESET"
+}
+
+###
+
+### [OPT-9] Unknown pair → 400
+POST {{host}}/optimizer/jobs
+X-Api-Token: {{token}}
+Content-Type: application/json
+
+{
+  "pair": "DOGEEUR",
+  "mode": "AGGRESSIVE",
+  "n_trials": 10
+}
+
+###
+
+### [OPT-10] n_trials out of range → 422 Unprocessable Entity
+POST {{host}}/optimizer/jobs
+X-Api-Token: {{token}}
+Content-Type: application/json
+
+{
+  "pair": "XBTEUR",
+  "mode": "AGGRESSIVE",
+  "n_trials": 0
+}
+
+###
+
+### [OPT-11] Invalid mode → 422
+POST {{host}}/optimizer/jobs
+X-Api-Token: {{token}}
+Content-Type: application/json
+
+{
+  "pair": "XBTEUR",
+  "mode": "BADMODE",
+  "n_trials": 10
+}
+
+###
+
+# ─────────────────────────────────────────────────────────────────────────────
+# EXISTING ENDPOINTS — quick sanity (not Phase 10, but confirm no regressions)
+# ─────────────────────────────────────────────────────────────────────────────
+
+### [REG-1] Health / status
+GET {{host}}/status
+X-Api-Token: {{token}}
+
+###
+
+### [REG-2] Market data
+GET {{host}}/market
+X-Api-Token: {{token}}
+
+###
+
+### [REG-3] Positions
+GET {{host}}/positions
+X-Api-Token: {{token}}
+
+###
+
+### [REG-4] Balance
+GET {{host}}/balance
+X-Api-Token: {{token}}
+
+###

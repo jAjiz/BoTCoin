@@ -50,25 +50,30 @@ def _atr_percentiles(frame) -> tuple[float, float, float, float]:
 
 
 def _build_summary(ops: list[Operation], row_count: int, source: str) -> dict:
-    pnl_values = [op.pnl_abs for op in ops if op.pnl_abs is not None]
+    # All pnl_abs values (including the initial entry) for the correct net total.
+    all_pnl = [op.pnl_abs for op in ops if op.pnl_abs is not None]
+    # Round-trip trades only (skip idx=1, the initial market entry) for per-trade stats.
+    trade_pnl = [op.pnl_abs for op in ops if op.pnl_abs is not None and op.idx != 1]
     total_fees = float(sum(op.fee_abs for op in ops if op.fee_abs is not None))
+    total_pnl = float(sum(all_pnl)) if all_pnl else 0.0
+    total_pnl_pct = float(ops[-1].cum_pnl) if ops and ops[-1].cum_pnl is not None else 0.0
 
-    if pnl_values:
-        pnl = np.array(pnl_values, dtype=float)
+    if trade_pnl:
+        pnl = np.array(trade_pnl, dtype=float)
         win_rate = float(np.mean(pnl > 0) * 100.0)
-        total_pnl = float(pnl.sum())
         best = float(pnl.max())
         worst = float(pnl.min())
         avg = float(pnl.mean())
         median = float(np.median(pnl))
     else:
-        win_rate = total_pnl = best = worst = avg = median = 0.0
+        win_rate = best = worst = avg = median = 0.0
 
     return {
         "ops_count": len(ops),
-        "pnl_samples": len(pnl_values),
+        "pnl_samples": len(trade_pnl),
         "win_rate_pct": win_rate,
         "total_pnl_eur": total_pnl,
+        "total_pnl_pct": total_pnl_pct,
         "total_fees_eur": total_fees,
         "best_op_pnl_eur": best,
         "worst_op_pnl_eur": worst,
@@ -80,7 +85,12 @@ def _build_summary(ops: list[Operation], row_count: int, source: str) -> dict:
 
 
 def run_backtest(req: BacktestRequest) -> BacktestResult:
-    df_full = db.load_ohlc_data(req.pair, CANDLE_TIMEFRAME).dropna(subset=["atr"]).reset_index(drop=True)
+    df_full = (
+        db.load_ohlc_data(req.pair, CANDLE_TIMEFRAME)
+        .dropna(subset=["atr"])
+        .sort_values("time")
+        .reset_index(drop=True)
+    )
 
     if req.start or req.end:
         # Date-sliced request: recompute events + ATR percentiles from the slice.
