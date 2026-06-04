@@ -1,19 +1,23 @@
 """Parameter optimizer.
 
-Pure ``run_optimize(req, calibration) -> OptimizerResult``: an Optuna TPE search
-over per-level stop percentiles plus (per mode) an activation multiplier or a
-minimum margin. No CLI, no prints, and — critically — no mutation of the global
-trading config: every candidate is evaluated by building an ``EngineConfig`` and
-running ``trading.engine.simulate_operations``.
+Pure ``run_optimize(req, calibration) -> OptimizerResult``: two parallel Optuna
+TPE searches (k_act branch and min_margin branch) over per-level stop
+percentiles. Each study gets half the trial budget and runs in its own spawned
+process; results are merged and ranked globally by robust_pnl.
+
+Split method is always CONTINUE: the simulation runs on the full dataset and
+results are partitioned at the train/test boundary, matching how a new config
+would behave in production (the bot never resets mid-history).
 
 The calibration (structural events + ATR percentiles) is passed in explicitly,
 not read from ``core.runtime`` — the worker runs in a spawned child process whose
-runtime cache is empty (see the Phase 10 plan §5.0). ``None`` means "recompute
-from the working dataframe" (sliced requests or a cold parent cache).
+runtime cache is empty. ``None`` means "recompute from the working dataframe".
 """
 
 import math
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
+from multiprocessing import get_context
 
 import numpy as np
 import optuna
@@ -28,7 +32,6 @@ from trading.market_analyzer import analyze_structural_noise
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 MODES = ("OPTIMIZE", "CURRENT")
-SPLIT_METHODS = ("RESET", "CONTINUE", "BOTH")
 
 
 # --- pure helpers ----------------------------------------------------------
@@ -77,25 +80,12 @@ class Score:
 
 
 def _robust_key(train: Score, test: Score) -> tuple[float, int]:
-    # Robust rank: worst-case P&L across train/test.
     return (float(min(train.total_pnl, test.total_pnl)), int(min(train.pnl_samples, test.pnl_samples)))
-
-
-def _overall_robust_key(
-    reset_train: Score,
-    reset_test: Score,
-    cont_train: Score,
-    cont_test: Score,
-) -> tuple[float, int]:
-    rr_pnl, rr_n = _robust_key(reset_train, reset_test)
-    cr_pnl, cr_n = _robust_key(cont_train, cont_test)
-    return (float(min(rr_pnl, cr_pnl)), int(min(rr_n, cr_n)))
 
 
 def _score_run(ops) -> Score:
     if not ops:
         return Score(total_pnl=-1e18, ops=0, pnl_samples=0)
-
     total = float(ops[-1].cum_pnl or 0.0)
     pnl_samples = sum(1 for op in ops if op.pnl_abs is not None)
     return Score(total_pnl=total, ops=len(ops), pnl_samples=pnl_samples)
@@ -107,18 +97,15 @@ def _split_scores_from_single_run(ops, boundary_time: str) -> tuple[Score, Score
         return empty, empty
 
     total_net = float(ops[-1].cum_pnl or 0.0)
-
     before = [op for op in ops if str(op.time) < str(boundary_time)]
     after = [op for op in ops if str(op.time) >= str(boundary_time)]
-
     first_net = float(before[-1].cum_pnl or 0.0) if before else 0.0
-
     first_samples = sum(1 for op in before if op.pnl_abs is not None)
     second_samples = sum(1 for op in after if op.pnl_abs is not None)
-
-    first_score = Score(total_pnl=first_net, ops=len(before), pnl_samples=first_samples)
-    second_score = Score(total_pnl=(total_net - first_net), ops=len(after), pnl_samples=second_samples)
-    return first_score, second_score
+    return (
+        Score(total_pnl=first_net, ops=len(before), pnl_samples=first_samples),
+        Score(total_pnl=(total_net - first_net), ops=len(after), pnl_samples=second_samples),
+    )
 
 
 def _format_env_lines(pair: str, cand: Candidate) -> list[str]:
@@ -137,18 +124,15 @@ def _format_env_lines(pair: str, cand: Candidate) -> list[str]:
 
 def _candidate_from_env(pair: str) -> Candidate:
     raw_k_act = TRADING_PARAMS[pair]["buy"].get("K_ACT")
-    k_act: float | None
     try:
         k_act = float(raw_k_act) if raw_k_act is not None and str(raw_k_act).strip() != "" else None
     except (TypeError, ValueError):
         k_act = None
-
     raw_mm = TRADING_PARAMS[pair]["buy"].get("MIN_MARGIN", 0) or 0
     try:
         min_margin = float(raw_mm)
     except (TypeError, ValueError):
         min_margin = 0.0
-
     stop_pcts = {lvl: float(STOP_PERCENTILES[pair][lvl]) for lvl in LEVELS}
     return Candidate(k_act=k_act, min_margin=min_margin, stop_pcts=stop_pcts)
 
@@ -165,7 +149,6 @@ def _build_engine_config(
     down_k: dict[str, np.ndarray],
     atr_desv_limit: float,
 ) -> EngineConfig:
-    # Stops: sell uses uptrend events; buy uses downtrend events.
     sell_k_stop = {lvl: _quantile_ceiled(up_k[lvl], cand.stop_pcts[lvl]) for lvl in LEVELS}
     buy_k_stop = {lvl: _quantile_ceiled(down_k[lvl], cand.stop_pcts[lvl]) for lvl in LEVELS}
     calibration = PairCalibration(
@@ -223,7 +206,6 @@ class OptimizerRequest:
     start: str | None = None
     end: str | None = None
     train_split: float = 1.0
-    split_method: str = "BOTH"  # "RESET" | "CONTINUE" | "BOTH"
     min_ops: int = 0
     min_test_ops: int = 0
     n_trials: int = 300
@@ -234,7 +216,6 @@ class OptimizerRequest:
 class OptimizerResult:
     pair: str
     mode: str
-    split_method: str
     top_candidates: list[dict]  # top 5 unique; each has candidate params + scores
     suggested_env_lines: list[str]  # formatted .env lines for top_candidates[0]
     n_trials_run: int
@@ -259,7 +240,6 @@ def _evaluate(
     train_df,
     test_df,
     split_boundary_time: str | None,
-    split_method: str,
     fee_rate: float,
     atr_thresholds: tuple[float, float, float, float],
     up_k: dict[str, np.ndarray],
@@ -272,25 +252,9 @@ def _evaluate(
     if test_df.empty:
         return _Eval(in_sample, in_sample, Score(-1e18, 0, 0), in_sample.total_pnl, in_sample.pnl_samples, 0)
 
-    if split_method == "RESET":
-        train = _score_run(simulate_operations(train_df, cfg, fee_rate=fee_rate))
-        test = _score_run(simulate_operations(test_df, cfg, fee_rate=fee_rate))
-        robust_pnl = _robust_key(train, test)[0]
-        return _Eval(in_sample, train, test, robust_pnl, train.pnl_samples, test.pnl_samples)
-
-    if split_method == "CONTINUE":
-        train, test = _split_scores_from_single_run(ops_all, split_boundary_time)
-        robust_pnl = _robust_key(train, test)[0]
-        return _Eval(in_sample, train, test, robust_pnl, train.pnl_samples, test.pnl_samples)
-
-    # BOTH: worst-case across RESET and CONTINUE methods.
-    reset_train = _score_run(simulate_operations(train_df, cfg, fee_rate=fee_rate))
-    reset_test = _score_run(simulate_operations(test_df, cfg, fee_rate=fee_rate))
-    cont_train, cont_test = _split_scores_from_single_run(ops_all, split_boundary_time)
-    robust_pnl = _overall_robust_key(reset_train, reset_test, cont_train, cont_test)[0]
-    train_samples = min(reset_train.pnl_samples, cont_train.pnl_samples)
-    test_samples = min(reset_test.pnl_samples, cont_test.pnl_samples)
-    return _Eval(in_sample, reset_train, reset_test, robust_pnl, train_samples, test_samples)
+    train, test = _split_scores_from_single_run(ops_all, split_boundary_time)
+    robust_pnl = _robust_key(train, test)[0]
+    return _Eval(in_sample, train, test, robust_pnl, train.pnl_samples, test.pnl_samples)
 
 
 def _scores_dict(ev: _Eval) -> dict:
@@ -303,6 +267,58 @@ def _scores_dict(ev: _Eval) -> dict:
         "test_pnl_pct": _clean(ev.test.total_pnl),
         "robust_pnl_pct": _clean(ev.robust_pnl),
     }
+
+
+# --- parallel study runner -------------------------------------------------
+
+
+def _run_study(
+    study_type: str,
+    seed: int,
+    n_trials: int,
+    eval_args: dict,
+) -> tuple[list[tuple], int, int]:
+    """Module-level worker: runs one Optuna study in a spawned process.
+
+    Returns (completed_tuples, n_pruned, n_total) where each completed tuple
+    is (params, value, user_attrs) — plain dicts/floats, fully picklable.
+    """
+    suggest_fn = _suggest_kact if study_type == "kact" else _suggest_minmargin
+    min_ops: int = eval_args["min_ops"]
+    min_test_ops: int = eval_args["min_test_ops"]
+    test_df = eval_args["test_df"]
+    eval_kwargs = {k: eval_args[k] for k in (
+        "pair", "df", "train_df", "test_df",
+        "split_boundary_time", "fee_rate", "atr_thresholds", "up_k", "down_k",
+    )}
+
+    study = _build_study(seed)
+
+    def objective(trial: optuna.Trial) -> float:
+        cand = suggest_fn(trial)
+        ev = _evaluate(cand, **eval_kwargs)
+        if test_df.empty:
+            if ev.train_samples < min_ops:
+                raise optuna.TrialPruned()
+        elif ev.train_samples < min_ops or ev.test_samples < min_test_ops:
+            raise optuna.TrialPruned()
+        trial.set_user_attr("in_sample_pnl", ev.in_sample.total_pnl)
+        trial.set_user_attr("train_pnl", ev.train.total_pnl)
+        trial.set_user_attr("test_pnl", ev.test.total_pnl)
+        return ev.robust_pnl
+
+    study.optimize(objective, n_trials=n_trials)
+
+    completed = [
+        (t.params, t.value, t.user_attrs)
+        for t in study.trials
+        if t.state == optuna.trial.TrialState.COMPLETE
+    ]
+    n_pruned = sum(1 for t in study.trials if t.state == optuna.trial.TrialState.PRUNED)
+    return completed, n_pruned, len(study.trials)
+
+
+# --- main entry point ------------------------------------------------------
 
 
 def run_optimize(req: OptimizerRequest, calibration: dict | None) -> OptimizerResult:
@@ -328,8 +344,6 @@ def run_optimize(req: OptimizerRequest, calibration: dict | None) -> OptimizerRe
     test_df = df.iloc[split_idx:].reset_index(drop=True)
     split_boundary_time = None if test_df.empty else str(df.iloc[split_idx]["dtime"])
 
-    # Resolve events + ATR percentiles: from the passed calibration when present,
-    # else recompute from the working dataframe (sliced or cold-cache path).
     if calibration is not None:
         up_events = calibration["up_events"]
         down_events = calibration["down_events"]
@@ -352,7 +366,6 @@ def run_optimize(req: OptimizerRequest, calibration: dict | None) -> OptimizerRe
         train_df=train_df,
         test_df=test_df,
         split_boundary_time=split_boundary_time,
-        split_method=req.split_method,
         fee_rate=fee_rate,
         atr_thresholds=atr_thresholds,
         up_k=up_k,
@@ -365,83 +378,63 @@ def run_optimize(req: OptimizerRequest, calibration: dict | None) -> OptimizerRe
         return OptimizerResult(
             pair=req.pair,
             mode=req.mode,
-            split_method=req.split_method,
             top_candidates=[{**_candidate_to_dict(cand), **_scores_dict(ev)}],
             suggested_env_lines=_format_env_lines(req.pair, cand),
             n_trials_run=1,
             n_trials_pruned=0,
         )
 
-    def _make_objective(suggest_fn):
-        def objective(trial: optuna.Trial) -> float:
-            cand = suggest_fn(trial)
-            ev = _evaluate(cand, **eval_kwargs)
-            if test_df.empty:
-                if ev.train_samples < req.min_ops:
-                    raise optuna.TrialPruned()
-            elif ev.train_samples < req.min_ops or ev.test_samples < req.min_test_ops:
-                raise optuna.TrialPruned()
-            trial.set_user_attr("in_sample_pnl", ev.in_sample.total_pnl)
-            trial.set_user_attr("train_pnl", ev.train.total_pnl)
-            trial.set_user_attr("test_pnl", ev.test.total_pnl)
-            return ev.robust_pnl
-        return objective
-
     n_kact = req.n_trials // 2
     n_minmargin = req.n_trials - n_kact
 
-    study_kact = _build_study(req.seed)
-    study_kact.optimize(_make_objective(_suggest_kact), n_trials=n_kact)
-
-    study_minmargin = _build_study(req.seed + 1)
-    study_minmargin.optimize(_make_objective(_suggest_minmargin), n_trials=n_minmargin)
-
-    all_completed = [
-        t
-        for study in (study_kact, study_minmargin)
-        for t in study.trials
-        if t.state == optuna.trial.TrialState.COMPLETE
-    ]
-    n_pruned = sum(
-        1
-        for study in (study_kact, study_minmargin)
-        for t in study.trials
-        if t.state == optuna.trial.TrialState.PRUNED
+    eval_args = dict(
+        **eval_kwargs,
+        min_ops=req.min_ops,
+        min_test_ops=req.min_test_ops,
     )
+
+    with ProcessPoolExecutor(max_workers=2, mp_context=get_context("spawn")) as pool:
+        fut_kact = pool.submit(_run_study, "kact", req.seed, n_kact, eval_args)
+        fut_minmargin = pool.submit(_run_study, "minmargin", req.seed + 1, n_minmargin, eval_args)
+        kact_completed, kact_pruned, kact_total = fut_kact.result()
+        minmargin_completed, minmargin_pruned, minmargin_total = fut_minmargin.result()
+
+    all_completed = kact_completed + minmargin_completed
+    n_pruned = kact_pruned + minmargin_pruned
+
     if not all_completed:
         raise ValueError("No candidate met the min_ops / min_test_ops constraints")
 
-    all_completed.sort(key=lambda t: t.value, reverse=True)
+    all_completed.sort(key=lambda t: t[1], reverse=True)
 
     # Deduplicate across both studies. Keys are disjoint (k_act vs min_margin
     # params) so same stop_pcts with different activation types won't collide.
     seen_params: set[tuple] = set()
     unique_completed = []
-    for t in all_completed:
-        key = tuple(sorted(t.params.items()))
+    for params, value, user_attrs in all_completed:
+        key = tuple(sorted(params.items()))
         if key not in seen_params:
             seen_params.add(key)
-            unique_completed.append(t)
+            unique_completed.append((params, value, user_attrs))
     top = unique_completed[:5]
 
-    def _trial_dict(t: optuna.trial.FrozenTrial) -> dict:
-        cand = _candidate_from_params(t.params)
+    def _trial_dict(params: dict, value: float, user_attrs: dict) -> dict:
+        cand = _candidate_from_params(params)
         return {
             **_candidate_to_dict(cand),
-            "in_sample_pnl_pct": t.user_attrs.get("in_sample_pnl"),
-            "train_pnl_pct": t.user_attrs.get("train_pnl"),
-            "test_pnl_pct": t.user_attrs.get("test_pnl"),
-            "robust_pnl_pct": t.value,
+            "in_sample_pnl_pct": user_attrs.get("in_sample_pnl"),
+            "train_pnl_pct": user_attrs.get("train_pnl"),
+            "test_pnl_pct": user_attrs.get("test_pnl"),
+            "robust_pnl_pct": value,
         }
 
-    best_cand = _candidate_from_params(top[0].params)
+    best_cand = _candidate_from_params(top[0][0])
 
     return OptimizerResult(
         pair=req.pair,
         mode=req.mode,
-        split_method=req.split_method,
-        top_candidates=[_trial_dict(t) for t in top],
+        top_candidates=[_trial_dict(p, v, ua) for p, v, ua in top],
         suggested_env_lines=_format_env_lines(req.pair, best_cand),
-        n_trials_run=len(study_kact.trials) + len(study_minmargin.trials),
+        n_trials_run=kact_total + minmargin_total,
         n_trials_pruned=n_pruned,
     )

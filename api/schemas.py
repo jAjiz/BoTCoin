@@ -89,7 +89,6 @@ class OptimizerRequest(BaseModel):
     start: str | None = None
     end: str | None = None
     train_split: float = Field(default=1.0, ge=0.5, le=1.0)
-    split_method: Literal["RESET", "CONTINUE", "BOTH"] = "RESET"
     min_ops: int = 0
     min_test_ops: int = 0
     n_trials: int = Field(default=300, ge=1, le=10_000)

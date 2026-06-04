@@ -45,11 +45,11 @@ class JobStore:
             job_id = db.create_optimizer_job(
                 pair=req.pair,
                 mode=req.mode,
-                split_method=req.split_method,
+                split_method="CONTINUE",
                 request=req.__dict__,
             )
             logging.info(
-                f"🔧 [Optimizer] Started for {req.pair} (mode={req.mode}, split={req.split_method}, job={job_id})",
+                f"🔧 [Optimizer] Started for {req.pair} (mode={req.mode}, job={job_id})",
                 to_telegram=True,
             )
             future = _EXECUTOR.submit(_worker_func, req.__dict__, calibration)
