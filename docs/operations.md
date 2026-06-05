@@ -56,19 +56,6 @@ docker compose -f docker-compose.test.yml run --rm test ruff format .
 
 The 80 % coverage gate is enforced by `pyproject.toml`.
 
-### Analysis scripts
-
-```bash
-# Market structure analysis
-docker compose run --rm botc python trading/market_analyzer.py PAIR=XBTEUR Volatility=ALL SHOW_EVENTS
-
-# Backtest
-docker compose run --rm botc python trading/backtest.py PAIR=XBTEUR FEE_PCT=0.26 START=2025-01-01
-
-# Parameter optimisation
-docker compose run --rm botc python trading/optimize_params.py PAIR=XBTEUR MODE=CONSERVATIVE FEE_PCT=0.26
-```
-
 ---
 
 ## Production deployment (VPS)
@@ -145,6 +132,97 @@ To edit the dashboard: make changes in the UI, use `Share → Export → Save to
 |---|---|
 | `GET /health` | `200 OK` when the service is up |
 | `GET /status` | JSON: `paused`, `last_run_at` |
+
+### Trading tools — backtest & optimizer
+
+The V1 CLI analysis scripts are now HTTP endpoints on the `botc` service: they run
+in-process against stored OHLC (and the live calibration cache) and never mutate
+trading state. All require the `X-Api-Token` header.
+
+> A ready-to-run REST Client collection covering every endpoint — status, market,
+> positions, balance, control, backtest, and optimizer — lives in
+> [`api/requests.http.example`](../api/requests.http.example). Copy it to
+> `api/requests.http` (gitignored) and set your token at the top of the file.
+
+#### Backtest (synchronous)
+
+`POST /backtest` simulates the strategy over stored OHLC and returns the result
+inline (well under a second on 60 days of 15-min data).
+
+```bash
+curl -X POST http://localhost:8000/backtest \
+  -H "X-Api-Token: $API_SECRET_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"pair":"XBTEUR","fee_pct":0.4}'
+```
+
+| Field | Default | Meaning |
+|---|---|---|
+| `pair` | — | Required; must be a configured pair (else `400`) |
+| `fee_pct` | `0.0` | Per-side fee as a percentage (e.g. `0.4`, Kraken's current worst case) |
+| `start` / `end` | `null` | Optional date slice; recomputes calibration from the slice |
+| `max_ops` | `null` | Cap on simulated operations |
+| `use_live_config` | `false` | Reuse the live bot's cached calibration instead of recomputing |
+
+The response carries a `summary` (op count, win rate, total PnL in EUR and %, fees,
+best/worst/avg/median per-trade PnL, `row_count`, and `source`: `cache` \|
+`recompute` \| `slice`) plus the full `operations` list.
+
+#### Optimizer (asynchronous)
+
+The optimizer is CPU-bound, so it runs in a spawned child process and is polled.
+`POST /optimizer/jobs` returns `202` with a `job_id`; a second submission while one
+is running returns `409`. Results persist to the `optimizer_jobs` table and survive
+restarts (a job interrupted by a restart is marked `failed`, never left `running`).
+Telegram is notified on start, completion, and failure.
+
+```bash
+# Submit
+JOB=$(curl -s -X POST http://localhost:8000/optimizer/jobs \
+  -H "X-Api-Token: $API_SECRET_TOKEN" -H "Content-Type: application/json" \
+  -d '{"pair":"XBTEUR","mode":"OPTIMIZE","fee_pct":0.4,"train_split":0.8,"n_trials":1000}' \
+  | jq -r .job_id)
+
+# Poll a single job
+curl -s http://localhost:8000/optimizer/jobs/$JOB -H "X-Api-Token: $API_SECRET_TOKEN" | jq
+
+# List recent jobs
+curl -s "http://localhost:8000/optimizer/jobs?limit=20" -H "X-Api-Token: $API_SECRET_TOKEN" | jq
+```
+
+Each search runs two independent Optuna TPE studies — one over the `K_ACT`
+activation branch, one over the `MIN_MARGIN` branch — and ranks the merged
+candidates by robust PnL (the worse of the train/test halves). Calibration is on the
+full OHLC history, exactly as the live bot does; the train/test split is evaluated in
+a single continuous run (no mid-history reset).
+
+| Mode | Behavior |
+|---|---|
+| `OPTIMIZE` | Run the TPE search at a fixed `n_trials` / `seed`; returns the ranked top candidates. |
+| `CURRENT` | Evaluate the live `.env` config only (1 trial) — a baseline to compare against. |
+| `AUTO` | Multi-seed convergence loop: run `OPTIMIZE` across `n_seeds` random seeds, escalating `n_trials` by `trial_step` until `min_agree` of them agree (or `max_trials` is hit), then compare the winner to `CURRENT` and report whether it improves on the live config. |
+
+| Field | Default | Applies to | Meaning |
+|---|---|---|---|
+| `pair` | — | all | Required; must be a configured pair (else `400`) |
+| `mode` | — | all | Required; `OPTIMIZE` \| `CURRENT` \| `AUTO` (else `422`) |
+| `fee_pct` | `0.0` | all | Per-side fee percentage |
+| `start` / `end` | `null` | all | Optional date slice |
+| `train_split` | `0.8` | all | Train fraction for the train/test split (0.5–1.0) |
+| `min_ops` / `min_test_ops` | `0` | OPTIMIZE, AUTO | Prune trials below these op counts |
+| `n_trials` | `1000` | OPTIMIZE, AUTO | Optuna TPE trials (the initial count in AUTO) |
+| `seed` | `42` | OPTIMIZE | Sampler seed |
+| `n_seeds` | `4` | AUTO | Random seeds run per round (2–8) |
+| `min_agree` | `3` | AUTO | Seeds that must converge to accept (2–8) |
+| `trial_step` | `500` | AUTO | Trial increment per escalation (100–2000) |
+| `max_trials` | `9000` | AUTO | Trial ceiling before giving up (500–20000) |
+
+A completed job's `result` holds the ranked `top_candidates` (each with its
+`k_act`/`min_margin`, per-level stop percentiles, and in-sample/train/test/robust
+PnL) and ready-to-paste `suggested_env_lines`. AUTO results additionally report
+`converged`, `is_improvement`, `current_robust_pnl`, `seeds_used`, `n_seeds_agreed`,
+and `n_trials_at_convergence`. Applying them is manual: copy the suggested lines into
+`.env` and redeploy (hot-reload of trading parameters is future work).
 
 ---
 

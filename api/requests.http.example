@@ -1,0 +1,335 @@
+### BoTCoin API — HTTP request collection
+### REST Client for VS Code — covers all endpoints in the project.
+### The @job_id / @auto_job_id variables are captured automatically from the submit responses.
+
+@host = http://localhost:8000
+@token = your-api-token-here
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STATUS
+# ─────────────────────────────────────────────────────────────────────────────
+
+### [ST-1] Bot status (paused flag + last run time)
+GET {{host}}/status
+X-Api-Token: {{token}}
+
+###
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MARKET
+# ─────────────────────────────────────────────────────────────────────────────
+
+### [MK-1] All pairs
+GET {{host}}/market
+X-Api-Token: {{token}}
+
+###
+
+### [MK-2] Single pair
+GET {{host}}/market/XBTEUR
+X-Api-Token: {{token}}
+
+###
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POSITIONS
+# ─────────────────────────────────────────────────────────────────────────────
+
+### [POS-1] All open positions
+GET {{host}}/positions
+X-Api-Token: {{token}}
+
+###
+
+### [POS-2] Single pair position
+GET {{host}}/positions/XBTEUR
+X-Api-Token: {{token}}
+
+###
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BALANCE
+# ─────────────────────────────────────────────────────────────────────────────
+
+### [BAL-1] Current balance
+GET {{host}}/balance
+X-Api-Token: {{token}}
+
+###
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CONTROL
+# ─────────────────────────────────────────────────────────────────────────────
+
+### [CTL-1] Pause the bot
+POST {{host}}/control/pause
+X-Api-Token: {{token}}
+Content-Type: application/json
+
+{
+  "updated_by": "manual"
+}
+
+###
+
+### [CTL-2] Resume the bot
+POST {{host}}/control/resume
+X-Api-Token: {{token}}
+Content-Type: application/json
+
+{
+  "updated_by": "manual"
+}
+
+###
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BACKTEST
+# ─────────────────────────────────────────────────────────────────────────────
+
+### [BT-1] Full history — recompute path
+POST {{host}}/backtest
+X-Api-Token: {{token}}
+Content-Type: application/json
+
+{
+  "pair": "XBTEUR",
+  "fee_pct": 0.4
+}
+
+###
+
+### [BT-2] Live calibration cache (use_live_config=true)
+### Requires the scheduler to have run calculate_trading_parameters at least once.
+### Falls through to recompute if the cache is cold — result is identical data.
+POST {{host}}/backtest
+X-Api-Token: {{token}}
+Content-Type: application/json
+
+{
+  "pair": "XBTEUR",
+  "fee_pct": 0.4,
+  "use_live_config": true
+}
+
+###
+
+### [BT-3] Date-sliced — forces the slice + recompute path
+POST {{host}}/backtest
+X-Api-Token: {{token}}
+Content-Type: application/json
+
+{
+  "pair": "XBTEUR",
+  "fee_pct": 0.4,
+  "start": "2026-05-20",
+  "end": "2026-06-01"
+}
+
+###
+
+### [BT-4] Capped at 10 operations
+POST {{host}}/backtest
+X-Api-Token: {{token}}
+Content-Type: application/json
+
+{
+  "pair": "XBTEUR",
+  "fee_pct": 0.4,
+  "max_ops": 10
+}
+
+###
+
+### [BT-5] ETHEUR pair
+POST {{host}}/backtest
+X-Api-Token: {{token}}
+Content-Type: application/json
+
+{
+  "pair": "ETHEUR",
+  "fee_pct": 0.4
+}
+
+###
+
+### [BT-6] Unknown pair → 400
+POST {{host}}/backtest
+X-Api-Token: {{token}}
+Content-Type: application/json
+
+{
+  "pair": "DOGEEUR"
+}
+
+###
+
+### [BT-7] No auth → 401
+POST {{host}}/backtest
+Content-Type: application/json
+
+###
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OPTIMIZER — OPTIMIZE mode
+# ─────────────────────────────────────────────────────────────────────────────
+
+### [OPT-1] Submit — OPTIMIZE mode
+# @name submitJob
+POST {{host}}/optimizer/jobs
+X-Api-Token: {{token}}
+Content-Type: application/json
+
+{
+  "pair": "XBTEUR",
+  "mode": "OPTIMIZE",
+  "fee_pct": 0.4,
+  "train_split": 0.8,
+  "n_trials": 1000,
+  "seed": 42
+}
+
+###
+
+@job_id = {{submitJob.response.body.job_id}}
+
+### [OPT-2] Poll job status (repeat until status != "running")
+GET {{host}}/optimizer/jobs/{{job_id}}
+X-Api-Token: {{token}}
+
+###
+
+### [OPT-3] Submit while [OPT-1] is still running → 409 Conflict
+POST {{host}}/optimizer/jobs
+X-Api-Token: {{token}}
+Content-Type: application/json
+
+{
+  "pair": "XBTEUR",
+  "mode": "OPTIMIZE"
+}
+
+###
+
+### [OPT-4] List all jobs (default limit=20)
+GET {{host}}/optimizer/jobs
+X-Api-Token: {{token}}
+
+###
+
+### [OPT-5] List with explicit limit
+GET {{host}}/optimizer/jobs?limit=5
+X-Api-Token: {{token}}
+
+###
+
+### [OPT-6] Get unknown job → 404
+GET {{host}}/optimizer/jobs/00000000-0000-0000-0000-000000000000
+X-Api-Token: {{token}}
+
+###
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OPTIMIZER — CURRENT mode
+# ─────────────────────────────────────────────────────────────────────────────
+
+### [OPT-7] CURRENT mode — evaluates the live .env config, returns 1 trial
+POST {{host}}/optimizer/jobs
+X-Api-Token: {{token}}
+Content-Type: application/json
+
+{
+  "pair": "XBTEUR",
+  "mode": "CURRENT",
+  "fee_pct": 0.4,
+  "train_split": 0.8
+}
+
+###
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OPTIMIZER — AUTO mode
+# ─────────────────────────────────────────────────────────────────────────────
+
+### [OPT-8] AUTO mode — all defaults (n_trials=1000 initial, max_trials=9000)
+# @name submitAutoJob
+POST {{host}}/optimizer/jobs
+X-Api-Token: {{token}}
+Content-Type: application/json
+
+{
+  "pair": "XBTEUR",
+  "mode": "AUTO",
+  "fee_pct": 0.4,
+  "train_split": 0.8
+}
+
+###
+
+@auto_job_id = {{submitAutoJob.response.body.job_id}}
+
+### [OPT-9] Poll AUTO job status (repeat until status != "running")
+GET {{host}}/optimizer/jobs/{{auto_job_id}}
+X-Api-Token: {{token}}
+
+###
+
+### [OPT-10] AUTO mode — quick smoke (500 initial, max 1000)
+POST {{host}}/optimizer/jobs
+X-Api-Token: {{token}}
+Content-Type: application/json
+
+{
+  "pair": "XBTEUR",
+  "mode": "AUTO",
+  "fee_pct": 0.4,
+  "train_split": 0.8,
+  "n_trials": 500,
+  "trial_step": 500,
+  "max_trials": 1000,
+  "n_seeds": 3,
+  "min_agree": 2
+}
+
+###
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OPTIMIZER — error cases
+# ─────────────────────────────────────────────────────────────────────────────
+
+### [OPT-11] Unknown pair → 400
+POST {{host}}/optimizer/jobs
+X-Api-Token: {{token}}
+Content-Type: application/json
+
+{
+  "pair": "DOGEEUR",
+  "mode": "OPTIMIZE"
+}
+
+###
+
+### [OPT-12] n_trials out of range → 422 Unprocessable Entity
+POST {{host}}/optimizer/jobs
+X-Api-Token: {{token}}
+Content-Type: application/json
+
+{
+  "pair": "XBTEUR",
+  "mode": "OPTIMIZE",
+  "n_trials": 0
+}
+
+###
+
+### [OPT-13] Invalid mode → 422
+POST {{host}}/optimizer/jobs
+X-Api-Token: {{token}}
+Content-Type: application/json
+
+{
+  "pair": "XBTEUR",
+  "mode": "BADMODE"
+}
+
+###

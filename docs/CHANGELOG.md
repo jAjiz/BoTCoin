@@ -10,6 +10,33 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [2.10.0] – Phase 10: Trading Tools Integration — Backtest + Optimizer
+
+### Added
+- `trading/engine.py` — pure config-as-argument simulation engine (`PairCalibration`, `EngineConfig`, `SidePolicy`, `Operation`, `simulate_operations`) reading no module-level globals; includes a port of `reanchor_activation_price` into the simulation
+- Structural-events calibration cache in `core/runtime.py` (`update_pair_calibration` / `get_pair_calibration`): per-pair structural events + ATR percentiles, dual-written by `calculate_trading_parameters` without changing its calculation logic
+- `OptimizerJob` ORM model and `optimizer_jobs` table (Alembic migration `20260602_02`) with DAL helpers (create / complete / fail / get / list / cleanup-orphaned); orphan-cleanup hook on FastAPI lifespan startup
+- `trading/optimizer/` package: `search.py` (Optuna TPE `run_optimize(req, calibration)`), `jobs.py` (`JobStore` single-slot lock over a spawn-context `ProcessPoolExecutor`, one-shot supervisor coroutine), `worker.py` (child-process entrypoint fed the parent's calibration snapshot)
+- REST endpoints: synchronous `POST /backtest`; asynchronous `POST /optimizer/jobs` (`202` + `job_id`, `409` when busy), `GET /optimizer/jobs/{id}`, `GET /optimizer/jobs`
+- Pydantic request/response schemas for the new endpoints in `api/schemas.py`
+- Telegram notifications on optimizer start, completion, and failure
+- `optuna` pinned in `requirements.txt`
+- `plan/phase-10-trading-tools-integration.md` — execution plan for this phase
+
+### Changed
+- `trading/backtest.py` rewritten from a CLI script into a pure `run_backtest(req) -> BacktestResult` library entry point that builds an `EngineConfig` and reuses the calibration cache
+- `trading/optimize_params.py` renamed to `trading/optimizer/search.py`; exhaustive parameter grid replaced by an Optuna TPE search
+- `trading/market_analyzer.py` reduced to library-only; `analyze_structural_noise` no longer takes `print_results` / `show_events` / `volatility_level`
+- Pure-Python engine met the wall-clock budget, so the optional Numba JIT (Appendix A of the phase plan) was evaluated and not adopted — no compiled toolchain added to the image
+- `README.md`, `ROADMAP.md`, and `docs/operations.md` updated to document the new endpoints and mark Phase 10 complete
+
+### Removed
+- CLI entry points (`_parse_args`, `if __name__ == "__main__"`, `main`) from `backtest.py`, the optimizer, and `market_analyzer.py`
+- Exhaustive-grid constants (`STOP_PCT_CHOICES`, `K_ACT_CHOICES`, `MIN_MARGIN_CHOICES`) and `_iter_exhaustive_candidates` from the optimizer
+- `print_pair_argument_error`, `print_statistics`, `print_events_detail`, `print_structural_noise_results` from `core/utils.py` — orphaned after the CLI removal
+
+---
+
 ## [2.9.0] – Phase 9: Project Documentation & Portfolio Framing
 
 ### Added

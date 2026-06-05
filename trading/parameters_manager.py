@@ -6,8 +6,10 @@ import pandas as pd
 
 import core.database as db
 import core.logging as logging
+import core.runtime as runtime
 from core.config import CANDLE_TIMEFRAME, PAIRS, STOP_PERCENTILES, TRADING_PARAMS
 from core.config import VOLATILITY_LEVELS as LEVELS
+from trading.engine import PairCalibration
 from trading.market_analyzer import analyze_structural_noise
 
 
@@ -40,7 +42,7 @@ def calculate_trading_parameters(pair: str, infoLog: bool = True) -> None:
         logging.info(f"Calculating trading parameters for {pair}...")
 
     try:
-        df = db.load_ohlc_data(pair, CANDLE_TIMEFRAME).dropna(subset=["atr"])
+        df = db.load_ohlc_data(pair, CANDLE_TIMEFRAME).dropna(subset=["atr"]).sort_values("time").reset_index(drop=True)
     except Exception as e:
         logging.error(f"Error loading data for {pair}: {e}")
         raise e
@@ -73,6 +75,33 @@ def calculate_trading_parameters(pair: str, infoLog: bool = True) -> None:
         logging.info(f"K_STOP_SELL → {sell_msg}")
         buy_msg = " | ".join(f"{lvl}:{fmt(buy_k_stops[lvl])}" for lvl in LEVELS)
         logging.info(f"K_STOP_BUY  → {buy_msg}")
+
+    # Dual-write: in addition to the globals above (the live-bot read path,
+    # unchanged), publish the calibration to the in-process cache so backtest can
+    # reuse the events + ATR percentiles without re-running analyze_structural_noise.
+    runtime.update_pair_calibration(
+        pair,
+        up_events=uptrend_events,
+        down_events=downtrend_events,
+        atr_p20=float(PAIRS[pair]["atr_20pct"]),
+        atr_p50=float(PAIRS[pair]["atr_50pct"]),
+        atr_p80=float(PAIRS[pair]["atr_80pct"]),
+        atr_p95=float(PAIRS[pair]["atr_95pct"]),
+        row_count=len(df),
+    )
+
+
+def build_calibration(pair: str) -> PairCalibration:
+    """Build a PairCalibration from current globals. Used by the API to seed
+    EngineConfig from live state without re-running analyze_structural_noise."""
+    return PairCalibration(
+        atr_p20=float(PAIRS[pair]["atr_20pct"]),
+        atr_p50=float(PAIRS[pair]["atr_50pct"]),
+        atr_p80=float(PAIRS[pair]["atr_80pct"]),
+        atr_p95=float(PAIRS[pair]["atr_95pct"]),
+        k_stop_buy=dict(TRADING_PARAMS[pair]["buy"].get("K_STOP") or {}),
+        k_stop_sell=dict(TRADING_PARAMS[pair]["sell"].get("K_STOP") or {}),
+    )
 
 
 def get_volatility_level(pair: str, atr_val: float) -> str:
