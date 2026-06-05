@@ -28,7 +28,7 @@
   - **Orphan cleanup on startup.** Any `optimizer_jobs` row left in `status='running'` after a crash is marked `failed` with `error='interrupted by restart'` during the FastAPI lifespan, before the scheduler starts.
   - **Search algorithm: Optuna TPE, exhaustive grid dropped.** ~300 trials reach the same quality as 130K exhaustive candidates for this search space. The exhaustive path is removed; `STOP_PCT_CHOICES` / `K_ACT_CHOICES` / `MIN_MARGIN_CHOICES` are deleted.
   - **CLI is dropped entirely.** `_parse_args`, `if __name__ == "__main__"`, and `print_*` integrations are removed from `backtest.py`, `optimizer.py` (renamed from `optimize_params.py`), and `market_analyzer.py`. The print helpers in `core/utils.py` (`print_pair_argument_error`, `print_statistics`, `print_events_detail`, `print_structural_noise_results`) lose their last call sites and are deleted with them.
-  - **Engine ships as pure Python first; Numba is an optional speedup gated on a benchmark.** Dropping the exhaustive grid (130K → ~300 trials, a ~400× reduction in simulations) may already make both endpoints fast enough. The engine is therefore built and shipped as pure Python (Step 1), then **benchmarked** (Appendix A). Numba JIT is added **only if** the benchmark shows the optimizer exceeds an acceptable wall-clock budget — it is not a baseline dependency, because it pulls a compiled LLVM toolchain, adds cold-start latency, forces a bit-identical-equivalence burden, and is invisible to coverage. Optuna is pinned exactly from the start; Numba is pinned only if Appendix A adopts it.
+  - **Engine ships as pure Python.** Dropping the exhaustive grid (130K → ~300 trials, a ~400× reduction in simulations) makes both endpoints fast enough. The engine is built and shipped as pure Python with no JIT dependency.
 
 ## Target outcome
 
@@ -195,12 +195,6 @@ Assert the two return identical `list[Operation]`. The test guards the refactor;
 **Commit:** `feat(engine): add trading/engine.py with PairCalibration, EngineConfig, pure simulate_operations`.
 
 ---
-
-## Step 2 — Benchmark the pure-Python engine (Numba gate)
-
-**Deferred / conditional.** The engine ships as pure Python (Step 1). Before considering any JIT work, benchmark the real workload — see **Appendix A**. Numba is added only if the optimizer's wall-clock under realistic settings (`n_trials=300`, `split_method="BOTH"`, 60–365d of 15-min data) exceeds the acceptable budget. If the benchmark passes, this step is a no-op and the phase has zero Numba surface.
-
-The benchmark, the JIT design, the equivalence requirements, and the coverage-exclusion handling all live in Appendix A so they don't clutter the mainline steps.
 
 ---
 
@@ -1062,7 +1056,6 @@ Two edits to `api/app.py`:
 Update `README.md`:
 
 - Add a new subsection under the existing API documentation section listing the four new endpoints, the request/response shapes, and a note that `/optimizer/jobs` returns 409 when an optimization is already running.
-- Only if Appendix A adopted Numba: add a one-line note under "Code quality" explaining that `numba` requires LLVM; the dev image already ships it and no host install is needed.
 
 `ROADMAP.md` already carries the Phase 10 entry; reconcile its scope/success-criteria bullets with what actually shipped (in particular, drop the auto-lookback bullet — that moved to Phase 11 — and reflect whether Numba was adopted).
 
@@ -1130,18 +1123,14 @@ Each bullet is one focused commit. After each, run `pytest tests/unit` and `ruff
 9. `feat(api): /backtest sync endpoint + /optimizer/jobs async endpoints`
 10. `docs: add Phase 10 trading-tools API to README`
 
-Optional, only if Appendix A's benchmark fails the budget:
-
-11. `perf(engine): JIT-compile simulate_operations core with Numba` (adds `numba==<resolved>` to `requirements.txt` and the coverage exclusion)
-
 ---
 
 ## Acceptance checklist
 
 Run all of these before opening the PR:
 
-- [ ] `requirements.txt` pins `optuna==<resolved>` with a concrete version resolved via `pip show`. (`numba` is present **only** if Appendix A adopted it.)
-- [ ] `trading/engine.py` exists; its `simulate_operations` is pure Python (or `@njit`-backed only if Appendix A applied) and reads no module-level globals.
+- [ ] `requirements.txt` pins `optuna==<resolved>` with a concrete version resolved via `pip show`.
+- [ ] `trading/engine.py` exists; its `simulate_operations` is pure Python and reads no module-level globals.
 - [ ] `trading/backtest.py` exports `run_backtest(req) -> BacktestResult` and contains no `sys.argv`, no `print`, no `__main__` block. Its recompute/slice paths compute the four ATR percentiles explicitly (not via `analyze_structural_noise`).
 - [ ] `trading/optimizer.py` exists (renamed from `optimize_params.py`), exports `run_optimize(req, calibration) -> OptimizerResult`, uses Optuna TPE, contains no exhaustive grid constants.
 - [ ] `trading/market_analyzer.py` no longer takes `print_results` / `show_events` / `volatility_level` parameters and has no `__main__` block.
@@ -1179,54 +1168,131 @@ Explicitly out of scope — do not add any of these:
 - **`mypy` / `pyright` enforcement on the new modules.** Phase-level convention from Phase 6 stands.
 - **Backtest `CONTINUE` / `RESET` / `BOTH` split selection.** Backtest is single-shot; only the optimizer takes a `split_method`.
 - **Auto-lookback window selection / any change to live-bot K_STOP calibration.** This phase keeps full-history calibration. The K_STOP stability sweep, the candidate-window set, the plateau heuristic, and per-level vs single window questions all live in **Phase 11** (`plan/phase-11-auto-lookback-window.md`).
-- **Numba as a baseline dependency.** Pure-Python engine first; Numba only via Appendix A's benchmark gate.
 - **CHANGELOG entry** (Phase 9 owns the changelog introduction).
 
 ---
 
-## Appendix A — Numba speedup (conditional, gated on a benchmark)
+## Appendix A — Auto-Optimize mode (`mode="AUTO"`)
 
-The engine ships as pure Python. Numba is added **only if** the benchmark below shows the optimizer is too slow. Do this measurement before writing any JIT code.
+Adds a `mode="AUTO"` to the existing `POST /optimizer/jobs` endpoint. The convergence loop lives in `search.py` alongside `run_optimize`. No new files, no new endpoints — just a new mode that routes through the same worker/job infrastructure.
 
-### A.1 Benchmark
+### A.1 Algorithm
 
-After Step 5 lands, on a representative dataset (one liquid pair, 60d / 180d / 365d of 15-min candles), time `run_optimize` at the realistic worst case: `mode="AGGRESSIVE"`, `split_method="BOTH"`, `n_trials=300`. Record wall-clock per run.
+Runs inside the already-spawned worker process (`_worker_func`). Each `run_optimize` call is sequential and internally runs the two Optuna studies (k_act / min_margin branches) one after the other.
 
-**Budget:** the optimizer should finish in **≤ ~60 s** on 180d. (It runs in a child process and does not block the live loop, so this is a UX bound on "submit and poll," not a hard latency requirement.) If pure Python is already under budget, **stop — no Numba.** Note the measured numbers in the PR description either way.
+```
+seeds = random.sample(range(1, 9999), n_seeds)
+n_trials = req.n_trials     # reused as initial_trials
 
-### A.2 If the budget fails — split the engine into a JIT core
+while n_trials <= req.max_trials:
+    results = [run_optimize(req_with_seed_and_trials, calibration) for s in seeds]
+    best = _check_convergence(results, req.min_agree)
 
-Add `numba==<resolved>` to `requirements.txt` (resolve via `pip show numba` after the first build; verify `python -c "import numba; print(numba.__version__)"` inside the dev image — Numba pulls a compiled LLVM toolchain and is the most likely dependency to break the build). Then split `simulate_operations` into:
+    if best is not None:
+        current = run_optimize(req_as_CURRENT, calibration)
+        current_robust = current.top_candidates[0]["robust_pnl_pct"]
+        is_improvement = best.top_candidates[0]["robust_pnl_pct"] > current_robust
+        return OptimizerResult(mode="AUTO", converged=True, is_improvement=is_improvement, ...)
 
-**Pure-Python wrapper** (same signature): extract `df["high"]`, `df["low"]`, `df["atr"]` to `np.float64` arrays once; pull `dtime` to a `list[str]`; build length-5 `k_stop_buy`/`k_stop_sell` float arrays indexed by level (`LL=0…HH=4`, `None`→`NaN`); call the JIT core; reconstruct `list[Operation]` from the returned arrays + time indices.
+    n_trials += req.trial_step
 
-**JIT core** `@njit(cache=True)`:
-
-```python
-from numba import njit
-
-@njit(cache=True)
-def _simulate_core(
-    highs, lows, atrs,                 # float64 arrays
-    atr_p20, atr_p50, atr_p80, atr_p95,
-    k_stop_buy, k_stop_sell,           # length-5 float64, NaN == missing
-    k_act_buy, k_act_sell,             # NaN == use min_margin path
-    min_margin_buy, min_margin_sell,
-    atr_desv_limit, fee_rate,
-    max_ops,                           # 0 == unbounded
-):  # -> (result_rows, time_indices)
-    ...
+return OptimizerResult(mode="AUTO", converged=False, ...)
 ```
 
-Logic mirrors the current Python loop (`backtest.py:163-290`). Numba does not support `dict`, `pd.Series`, or string ops — keep the body to scalars, NumPy arrays, and integer codes. The level-fallback in `lookup_k_stop` becomes a small JIT helper scanning the `k_stop_*` arrays for the nearest non-`NaN` entry. Use default `fastmath=False` so scalar ops match the Python reference.
+**`_check_convergence(results, min_agree)`**: groups results by `round(robust_pnl_pct, 2)` of their top candidate. If any group has `≥ min_agree` members, returns the highest-robust representative. Otherwise returns `None`.
 
-### A.3 Equivalence + coverage
+**"Better than current" baseline**: re-calls `run_optimize` with `mode="CURRENT"` (same `pair`, `train_split`, `fee_pct`) — evaluates the live `.env` config, 1 trial, no Optuna.
 
-- The Step 1.5 equivalence test must still pass against the JIT path. Add a parametrize axis over several `(fee_rate, max_ops)` combinations. Run the equivalence test with `NUMBA_DISABLE_JIT=1` so it exercises the real Python body, then once more JIT-enabled to confirm the compiled path agrees with the reference (tolerance comparison if any drift appears; with `fastmath=False` it should be exact).
-- **Coverage:** add the JIT core to the coverage-exclusion list in `pyproject.toml` (alongside `core/scheduler.py`, `trading/backtest.py`, `trading/optimize_params.py`). Once compiled, `coverage.py` can't trace the `@njit` body, so it would otherwise read as uncovered and threaten the 80% gate.
+### A.2 Changes
 
-### A.4 Cold-start
+**`api/schemas.py`** — extend `OptimizerRequest`:
 
-Numba's first call on a fresh `__pycache__` compiles (~1–3 s); `cache=True` persists the artefact, but the first call after a fresh image build pays the cost. Acceptable: the live bot never calls the engine — only backtest/optimizer do — so the warm-up lands on the first request after deploy.
+```python
+mode: Literal["OPTIMIZE", "CURRENT", "AUTO"] = "OPTIMIZE"
+# AUTO-mode params (ignored for OPTIMIZE/CURRENT):
+n_seeds: int = Field(default=4, ge=2, le=8)
+min_agree: int = Field(default=3, ge=2, le=8)
+trial_step: int = Field(default=500, ge=100, le=2_000)
+max_trials: int = Field(default=4_000, ge=500, le=20_000)
+# n_trials is reused as initial_trials when mode="AUTO"
+```
 
-**Commit (only if adopted):** `perf(engine): JIT-compile simulate_operations core with Numba`.
+**`search.py`**:
+
+- Add `"AUTO"` to `MODES`.
+- Add matching fields to `OptimizerRequest` dataclass.
+- Add optional fields to `OptimizerResult` dataclass:
+  ```python
+  converged: bool = False
+  is_improvement: bool | None = None
+  current_robust_pnl: float | None = None
+  seeds_used: list = field(default_factory=list)
+  n_trials_at_convergence: int | None = None
+  ```
+- Add `_check_convergence(results, min_agree) -> OptimizerResult | None`.
+- Add `run_auto_optimize(req, calibration) -> OptimizerResult`.
+
+**`trading/optimizer/worker.py`** — route to `run_auto_optimize` when `mode == "AUTO"`:
+
+```python
+from trading.optimizer.search import OptimizerRequest, run_optimize, run_auto_optimize
+
+def _worker_func(req_dict: dict, calibration: dict | None) -> dict:
+    req = OptimizerRequest(**req_dict)
+    if req.mode == "AUTO":
+        result = run_auto_optimize(req, calibration)
+    else:
+        result = run_optimize(req, calibration)
+    return asdict(result)
+```
+
+**`trading/optimizer/jobs.py`** — extend `_finalize` to send a richer Telegram message when `mode == "AUTO"`, including convergence status, `is_improvement`, and suggested env lines.
+
+**`scripts/migrations/versions/20260602_02_optimizer_jobs.py`** — update check constraint to include `"AUTO"`:
+```sql
+mode IN ('OPTIMIZE', 'CURRENT', 'AUTO')
+```
+Apply manually to the running DB:
+```sql
+ALTER TABLE optimizer_jobs DROP CONSTRAINT ck_opt_jobs_mode_valid;
+ALTER TABLE optimizer_jobs ADD CONSTRAINT ck_opt_jobs_mode_valid
+  CHECK (mode IN ('OPTIMIZE', 'CURRENT', 'AUTO'));
+```
+
+**`requests.http`** — add smoke-test entries for AUTO mode.
+
+### A.3 Telegram notification format
+
+**Improvement found:**
+```
+🚀 [AutoOptimize] XBTEUR converged (3/4 seeds, 2000 trials) — improvement found
+Current robust: 5.43% → New: 9.43%
+XBTEUR_MIN_MARGIN=0.000
+XBTEUR_STOP_PCT_LL=0.35 ...
+```
+
+**Converged, not better:**
+```
+ℹ️ [AutoOptimize] XBTEUR converged (3/4 seeds, 1000 trials) — current is better
+9.43% (current) vs 8.12% (found) — no change needed
+```
+
+**No convergence:**
+```
+⚠️ [AutoOptimize] XBTEUR — no convergence within 4000 trials
+Best found: 7.21% (only N/4 seeds agreed)
+```
+
+### A.4 Note on initial trial count
+
+From empirical runs: seed=42 converges around 1000 trials; seed=7 needs ~6000. Starting at 500 (the default `n_trials` for AUTO jobs) means the first round will likely fail and the algorithm will escalate several times before reaching convergence. Using `n_trials=1000` or `n_trials=2000` as the initial count reduces expected escalations while still saving time when an easy convergence exists.
+
+### A.5 Verification
+
+1. `POST /optimizer/jobs` with `mode="AUTO"`, `max_trials=1000` — confirm 202 + job_id.
+2. Poll `GET /optimizer/jobs/{id}` until completed — confirm result has `converged`, `is_improvement`, `seeds_used`.
+3. Check Telegram for correctly formatted notification.
+4. Submit a second AUTO job while one is running → 409.
+5. Unit tests: mock `run_optimize` to return fixed `robust_pnl_pct` values, verify `_check_convergence` grouping and threshold logic.
+
+**Commit:** `feat(optimizer): add AUTO mode with multi-seed convergence loop`.
