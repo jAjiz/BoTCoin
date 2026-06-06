@@ -176,6 +176,12 @@ is running returns `409`. Results persist to the `optimizer_jobs` table and surv
 restarts (a job interrupted by a restart is marked `failed`, never left `running`).
 Telegram is notified on start, completion, and failure.
 
+> **Low-resource hosts:** the search is CPU- and RAM-bound and can starve the
+> trading engine (or lock up the whole box) on a small VM such as a free-tier
+> GCP `e2-micro`. Set `OPTIMIZER_DISABLED=true` there to reject new jobs with
+> `503`, and run searches offline on a bigger machine against a copy of the OHLC
+> data. `GET /optimizer/jobs` stays available so past results remain readable.
+
 ```bash
 # Submit
 JOB=$(curl -s -X POST http://localhost:8000/optimizer/jobs \

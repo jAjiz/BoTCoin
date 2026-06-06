@@ -8,7 +8,7 @@ from api.schemas import (
     OptimizerJobStatusResponse,
     OptimizerRequest,
 )
-from core.config import PAIRS
+from core.config import OPTIMIZER_DISABLED, PAIRS
 from trading.optimizer.jobs import JOB_STORE, OptimizerBusyError
 from trading.optimizer.search import OptimizerRequest as DTORequest
 
@@ -21,6 +21,8 @@ def _row_to_response(row: dict) -> OptimizerJobStatusResponse:
 
 @router.post("/jobs", response_model=OptimizerJobAcceptedResponse, status_code=202)
 async def submit(req: OptimizerRequest) -> OptimizerJobAcceptedResponse:
+    if OPTIMIZER_DISABLED:
+        raise HTTPException(status_code=503, detail="Optimizer is disabled on this host (OPTIMIZER_DISABLED=true)")
     if req.pair not in PAIRS:
         raise HTTPException(status_code=400, detail=f"Unknown pair: {req.pair}")
     try:

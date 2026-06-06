@@ -64,6 +64,14 @@ def test_submit_returns_202_with_job_id(monkeypatch) -> None:
     assert body["status"] == "running"
 
 
+def test_submit_disabled_returns_503(monkeypatch) -> None:
+    monkeypatch.setattr(optimizer_route, "OPTIMIZER_DISABLED", True)
+    client = _make_client(monkeypatch)
+    resp = client.post("/optimizer/jobs", json={"pair": _PAIR, "mode": "OPTIMIZE"})
+    assert resp.status_code == 503
+    assert "disabled" in resp.json()["detail"].lower()
+
+
 def test_submit_busy_returns_409(monkeypatch) -> None:
     def _busy(req):
         raise OptimizerBusyError("already running")
