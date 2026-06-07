@@ -23,7 +23,9 @@ runtime cache is empty. ``None`` means "recompute from the working dataframe".
 import contextlib
 import math
 import random
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
+from multiprocessing import get_context
 
 import numpy as np
 import optuna
@@ -363,19 +365,56 @@ def _new_seed_studies(seed: int) -> _SeedStudies:
     return _SeedStudies(seed=seed, kact=_build_study(seed), minmargin=_build_study(seed + 1))
 
 
-def _advance_seed_to(state: _SeedStudies, target_n_trials: int, eval_args: dict) -> tuple[list[tuple], int, int]:
+# Below this many trials in a run, branch parallelism isn't worth the process
+# spawn + dataframe pickling overhead, so the two branches run sequentially.
+_PARALLEL_MIN_TRIALS = 200
+
+
+def _branch_executor(target_trials: int):
+    """Context manager yielding a 2-worker process pool for branch parallelism
+    when the workload justifies it, else a null context yielding ``None`` (the
+    branches then run sequentially in-process). Reused across an AUTO search."""
+    if target_trials < _PARALLEL_MIN_TRIALS:
+        return contextlib.nullcontext(None)
+    return ProcessPoolExecutor(max_workers=2, mp_context=get_context("spawn"))
+
+
+def _advance_branch(study: optuna.Study, study_type: str, n_trials: int, eval_args: dict) -> optuna.Study:
+    """Run ``n_trials`` more on ``study`` and return it. Module-level and
+    picklable so it can run in a worker process: the warm-started study is
+    shipped over, advanced, and shipped back."""
+    study.optimize(_build_objective(study_type, eval_args), n_trials=n_trials)
+    return study
+
+
+def _advance_seed_to(
+    state: _SeedStudies,
+    target_n_trials: int,
+    eval_args: dict,
+    executor: ProcessPoolExecutor | None = None,
+) -> tuple[list[tuple], int, int]:
     """Warm-start: add trials to both branches until each reaches its half of
-    ``target_n_trials``, running only the delta. Returns the merged
+    ``target_n_trials``, running only the delta. When ``executor`` is given and
+    both branches have work, the two studies are advanced in parallel (one
+    process each) and the advanced copies shipped back. Returns the merged
     (completed, n_pruned, n_total) across both branches."""
     target_kact = target_n_trials // 2
     target_mm = target_n_trials - target_kact
+    d_kact = target_kact - state.kact_done
+    d_mm = target_mm - state.mm_done
 
-    if target_kact > state.kact_done:
-        state.kact.optimize(_build_objective("kact", eval_args), n_trials=target_kact - state.kact_done)
-        state.kact_done = target_kact
-    if target_mm > state.mm_done:
-        state.minmargin.optimize(_build_objective("minmargin", eval_args), n_trials=target_mm - state.mm_done)
-        state.mm_done = target_mm
+    if executor is not None and d_kact > 0 and d_mm > 0:
+        fut_kact = executor.submit(_advance_branch, state.kact, "kact", d_kact, eval_args)
+        fut_mm = executor.submit(_advance_branch, state.minmargin, "minmargin", d_mm, eval_args)
+        state.kact = fut_kact.result()
+        state.minmargin = fut_mm.result()
+    else:
+        if d_kact > 0:
+            _advance_branch(state.kact, "kact", d_kact, eval_args)
+        if d_mm > 0:
+            _advance_branch(state.minmargin, "minmargin", d_mm, eval_args)
+    state.kact_done = target_kact
+    state.mm_done = target_mm
 
     completed = _collect_completed(state.kact) + _collect_completed(state.minmargin)
     n_pruned = sum(
@@ -511,7 +550,8 @@ def run_optimize(req: OptimizerRequest, calibration: dict | None) -> OptimizerRe
         return _current_result(req, ctx["eval_kwargs"])
 
     state = _new_seed_studies(req.seed)
-    completed, n_pruned, n_total = _advance_seed_to(state, req.n_trials, ctx["eval_args"])
+    with _branch_executor(req.n_trials) as executor:
+        completed, n_pruned, n_total = _advance_seed_to(state, req.n_trials, ctx["eval_args"], executor)
     if not completed:
         raise ValueError("No candidate met the min_ops / min_test_ops constraints")
     return _result_from_completed(req, completed, n_pruned, n_total)
@@ -538,10 +578,16 @@ def _check_convergence(results: list[OptimizerResult], min_agree: int) -> tuple[
     return best_group[0], len(best_group)
 
 
-def _seed_result(state: _SeedStudies, target_n_trials: int, eval_args: dict, req: OptimizerRequest) -> OptimizerResult:
+def _seed_result(
+    state: _SeedStudies,
+    target_n_trials: int,
+    eval_args: dict,
+    req: OptimizerRequest,
+    executor: ProcessPoolExecutor | None = None,
+) -> OptimizerResult:
     """Advance one seed's studies to ``target_n_trials`` (warm-start) and build
     its OptimizerResult. The AUTO seam: mocked in tests to steer convergence."""
-    completed, n_pruned, n_total = _advance_seed_to(state, target_n_trials, eval_args)
+    completed, n_pruned, n_total = _advance_seed_to(state, target_n_trials, eval_args, executor)
     if not completed:
         raise ValueError("No candidate met the min_ops / min_test_ops constraints")
     return _result_from_completed(req, completed, n_pruned, n_total)
@@ -558,38 +604,41 @@ def run_auto_optimize(req: OptimizerRequest, calibration: dict | None) -> Optimi
     n_trials = req.n_trials
     last_results: list[OptimizerResult] = []
 
-    while n_trials <= req.max_trials:
-        last_results = []
-        for seed in seeds:
-            # min_ops constraints not met → treat that seed as non-converging
-            # this round; its studies persist and may qualify at a higher budget.
-            with contextlib.suppress(ValueError):
-                last_results.append(_seed_result(states[seed], n_trials, ctx["eval_args"], req))
+    # One process pool for the whole search runs the kact/minmargin branches in
+    # parallel (reused across seeds and escalation levels).
+    with _branch_executor(req.max_trials) as executor:
+        while n_trials <= req.max_trials:
+            last_results = []
+            for seed in seeds:
+                # min_ops constraints not met → treat that seed as non-converging
+                # this round; its studies persist and may qualify at a higher budget.
+                with contextlib.suppress(ValueError):
+                    last_results.append(_seed_result(states[seed], n_trials, ctx["eval_args"], req, executor))
 
-        converged = _check_convergence(last_results, req.min_agree)
-        if converged is not None:
-            best, n_agreed = converged
-            current = _current_result(req, ctx["eval_kwargs"])
-            current_robust = (
-                (current.top_candidates[0].get("robust_pnl_pct") or -1e18) if current.top_candidates else -1e18
-            )
-            best_robust = (best.top_candidates[0].get("robust_pnl_pct") or -1e18) if best.top_candidates else -1e18
-            return OptimizerResult(
-                pair=req.pair,
-                mode="AUTO",
-                top_candidates=best.top_candidates,
-                suggested_env_lines=best.suggested_env_lines,
-                n_trials_run=best.n_trials_run,
-                n_trials_pruned=best.n_trials_pruned,
-                converged=True,
-                is_improvement=best_robust > current_robust,
-                current_robust_pnl=current_robust if current_robust > -1e17 else None,
-                seeds_used=seeds,
-                n_trials_at_convergence=n_trials,
-                n_seeds_agreed=n_agreed,
-            )
+            converged = _check_convergence(last_results, req.min_agree)
+            if converged is not None:
+                best, n_agreed = converged
+                current = _current_result(req, ctx["eval_kwargs"])
+                current_robust = (
+                    (current.top_candidates[0].get("robust_pnl_pct") or -1e18) if current.top_candidates else -1e18
+                )
+                best_robust = (best.top_candidates[0].get("robust_pnl_pct") or -1e18) if best.top_candidates else -1e18
+                return OptimizerResult(
+                    pair=req.pair,
+                    mode="AUTO",
+                    top_candidates=best.top_candidates,
+                    suggested_env_lines=best.suggested_env_lines,
+                    n_trials_run=best.n_trials_run,
+                    n_trials_pruned=best.n_trials_pruned,
+                    converged=True,
+                    is_improvement=best_robust > current_robust,
+                    current_robust_pnl=current_robust if current_robust > -1e17 else None,
+                    seeds_used=seeds,
+                    n_trials_at_convergence=n_trials,
+                    n_seeds_agreed=n_agreed,
+                )
 
-        n_trials += req.trial_step
+            n_trials += req.trial_step
 
     # No convergence — return the best candidate from the last batch
     valid = [r for r in last_results if r.top_candidates]
