@@ -153,6 +153,12 @@ class OptimizerRequest(BaseModel):
     # this same model can echo a stored request back without re-failing historical
     # jobs that predate the search_space field.
     search_space: SearchSpace | None = None
+    # Regime filter (Phase 11). regime_enabled=True adds the ER search dimensions
+    # (OPTIMIZE/AUTO) or evaluates the live config with the fixed regime params
+    # below (CURRENT).
+    regime_enabled: bool = False
+    er_window: int = Field(default=32, ge=2, le=500)
+    chop_enter_pct: float = Field(default=0.33, ge=0.0, le=1.0)
 
 
 class OptimizerJobAcceptedResponse(BaseModel):

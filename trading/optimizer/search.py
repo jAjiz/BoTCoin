@@ -38,12 +38,20 @@ from optuna.samplers import TPESampler
 import core.database as db
 from core.config import ATR_DESV_LIMIT, CANDLE_TIMEFRAME, STOP_PERCENTILES, TRADING_PARAMS
 from core.config import VOLATILITY_LEVELS as LEVELS
-from trading.engine import EngineConfig, PairCalibration, SidePolicy, simulate_operations
+from trading.engine import EngineConfig, PairCalibration, RegimePolicy, SidePolicy, simulate_operations
 from trading.market_analyzer import analyze_structural_noise
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 MODES = ("OPTIMIZE", "CURRENT", "AUTO")
+
+# Regime (Phase 11) search space + fixed derived params. The search varies only
+# the ER window and the CHOP-enter percentile; the exit percentile is the enter
+# plus a fixed dead band (hysteresis) and the TREND split is display-only.
+_ER_WINDOW_CHOICES = (16, 24, 32, 48, 64, 96)
+_CHOP_ENTER_CHOICES = (0.25, 0.30, 0.33, 0.40, 0.50)
+_REGIME_CHOP_DEAD_BAND = 0.07
+_REGIME_TREND_PCT = 0.66
 
 
 # --- search space ----------------------------------------------------------
@@ -130,6 +138,9 @@ class Candidate:
     k_act: float | None
     min_margin: float | None
     stop_pcts: dict[str, float]
+    # Regime gate (Phase 11). Both None => gate disabled for this candidate.
+    er_window: int | None = None
+    chop_enter_pct: float | None = None
 
 
 @dataclass(frozen=True)
@@ -174,10 +185,14 @@ def _format_env_lines(pair: str, cand: Candidate) -> list[str]:
     lines.append(f"{pair}_STOP_PCT_MV={cand.stop_pcts['MV']:.2f}")
     lines.append(f"{pair}_STOP_PCT_HV={cand.stop_pcts['HV']:.2f}")
     lines.append(f"{pair}_STOP_PCT_HH={cand.stop_pcts['HH']:.2f}")
+    if cand.er_window is not None and cand.chop_enter_pct is not None:
+        lines.append(f"{pair}_ER_WINDOW={int(cand.er_window)}")
+        lines.append(f"{pair}_ER_CHOP_ENTER_PCT={cand.chop_enter_pct:.2f}")
     return lines
 
 
-def _candidate_from_env(pair: str) -> Candidate:
+def _candidate_from_env(req: "OptimizerRequest") -> Candidate:
+    pair = req.pair
     raw_k_act = TRADING_PARAMS[pair]["buy"].get("K_ACT")
     try:
         k_act = float(raw_k_act) if raw_k_act is not None and str(raw_k_act).strip() != "" else None
@@ -189,7 +204,11 @@ def _candidate_from_env(pair: str) -> Candidate:
     except (TypeError, ValueError):
         min_margin = 0.0
     stop_pcts = {lvl: float(STOP_PERCENTILES[pair][lvl]) for lvl in LEVELS}
-    return Candidate(k_act=k_act, min_margin=min_margin, stop_pcts=stop_pcts)
+    er_window = req.er_window if req.regime_enabled else None
+    chop_enter = req.chop_enter_pct if req.regime_enabled else None
+    return Candidate(
+        k_act=k_act, min_margin=min_margin, stop_pcts=stop_pcts, er_window=er_window, chop_enter_pct=chop_enter
+    )
 
 
 def _round2(v: float | None) -> float | None:
@@ -202,6 +221,8 @@ def _candidate_to_dict(cand: Candidate) -> dict:
         "k_act": cand.k_act,
         "min_margin": cand.min_margin,
         "stop_pcts": {lvl: _round2(p) for lvl, p in cand.stop_pcts.items()},
+        "er_window": cand.er_window,
+        "chop_enter_pct": _round2(cand.chop_enter_pct),
     }
 
 
@@ -224,7 +245,18 @@ def _build_engine_config(
         k_stop_sell=sell_k_stop,
     )
     side = SidePolicy(k_act=cand.k_act, min_margin=cand.min_margin or 0.0)
-    return EngineConfig(pair=pair, calibration=calibration, buy=side, sell=side, atr_desv_limit=atr_desv_limit)
+    regime = RegimePolicy()  # disabled by default
+    if cand.er_window is not None and cand.chop_enter_pct is not None:
+        regime = RegimePolicy(
+            enabled=True,
+            er_window=int(cand.er_window),
+            chop_enter_pct=float(cand.chop_enter_pct),
+            chop_exit_pct=min(float(cand.chop_enter_pct) + _REGIME_CHOP_DEAD_BAND, 1.0),
+            trend_pct=_REGIME_TREND_PCT,
+        )
+    return EngineConfig(
+        pair=pair, calibration=calibration, buy=side, sell=side, atr_desv_limit=atr_desv_limit, regime=regime
+    )
 
 
 # --- Optuna search ---------------------------------------------------------
@@ -238,29 +270,54 @@ def _suggest_stops(trial: optuna.Trial, grid: GridSpec) -> dict[str, float]:
     return {lvl: trial.suggest_float(f"stop_pct_{lvl}", grid.start, grid.end, step=grid.step) for lvl in LEVELS}
 
 
-def _suggest_kact(trial: optuna.Trial, space: SearchSpace) -> Candidate:
+def _suggest_regime(trial: optuna.Trial, regime_enabled: bool) -> tuple[int | None, float | None]:
+    """Suggest the two regime dimensions when the gate is enabled, else (None, None)."""
+    if not regime_enabled:
+        return None, None
+    er_window = trial.suggest_categorical("er_window", list(_ER_WINDOW_CHOICES))
+    chop_enter = trial.suggest_categorical("chop_enter_pct", list(_CHOP_ENTER_CHOICES))
+    return er_window, chop_enter
+
+
+def _suggest_kact(trial: optuna.Trial, space: SearchSpace, regime_enabled: bool) -> Candidate:
     g = space.k_act
+    er_window, chop_enter = _suggest_regime(trial, regime_enabled)
     return Candidate(
         k_act=trial.suggest_float("k_act", g.start, g.end, step=g.step),
         min_margin=None,
         stop_pcts=_suggest_stops(trial, space.stop_pcts),
+        er_window=er_window,
+        chop_enter_pct=chop_enter,
     )
 
 
-def _suggest_minmargin(trial: optuna.Trial, space: SearchSpace) -> Candidate:
+def _suggest_minmargin(trial: optuna.Trial, space: SearchSpace, regime_enabled: bool) -> Candidate:
     g = space.min_margin
+    er_window, chop_enter = _suggest_regime(trial, regime_enabled)
     return Candidate(
         k_act=None,
         min_margin=trial.suggest_float("min_margin", g.start, g.end, step=g.step),
         stop_pcts=_suggest_stops(trial, space.stop_pcts),
+        er_window=er_window,
+        chop_enter_pct=chop_enter,
     )
 
 
 def _candidate_from_params(params: dict) -> Candidate:
     stop_pcts = {lvl: params[f"stop_pct_{lvl}"] for lvl in LEVELS}
+    er_window = params.get("er_window")
+    chop_enter = params.get("chop_enter_pct")
     if "k_act" in params:
-        return Candidate(k_act=params["k_act"], min_margin=None, stop_pcts=stop_pcts)
-    return Candidate(k_act=None, min_margin=params.get("min_margin", 0.0), stop_pcts=stop_pcts)
+        return Candidate(
+            k_act=params["k_act"], min_margin=None, stop_pcts=stop_pcts, er_window=er_window, chop_enter_pct=chop_enter
+        )
+    return Candidate(
+        k_act=None,
+        min_margin=params.get("min_margin", 0.0),
+        stop_pcts=stop_pcts,
+        er_window=er_window,
+        chop_enter_pct=chop_enter,
+    )
 
 
 # --- request / result ------------------------------------------------------
@@ -284,6 +341,12 @@ class OptimizerRequest:
     # Search grids (required for OPTIMIZE/AUTO, ignored by CURRENT). Accepts a
     # SearchSpace or the plain dict produced by model_dump()/asdict round-trips.
     search_space: SearchSpace | None = None
+    # Regime filter (Phase 11). When enabled, OPTIMIZE/AUTO search the ER window
+    # + CHOP-enter percentile; CURRENT evaluates the live config with the fixed
+    # er_window / chop_enter_pct below.
+    regime_enabled: bool = False
+    er_window: int = 32
+    chop_enter_pct: float = 0.33
 
     def __post_init__(self) -> None:
         if isinstance(self.search_space, dict):
@@ -336,6 +399,7 @@ class EvalContext:
     min_ops: int
     min_test_ops: int
     search_space: SearchSpace | None = None
+    regime_enabled: bool = False
 
 
 def _evaluate(cand: Candidate, ctx: EvalContext) -> _Eval:
@@ -371,7 +435,7 @@ def _build_objective(study_type: str, ctx: EvalContext):
     suggest_fn = _suggest_kact if study_type == "kact" else _suggest_minmargin
 
     def objective(trial: optuna.Trial) -> float:
-        cand = suggest_fn(trial, ctx.search_space)
+        cand = suggest_fn(trial, ctx.search_space, ctx.regime_enabled)
         ev = _evaluate(cand, ctx)
         if ctx.test_df.empty:
             if ev.train_samples < ctx.min_ops:
@@ -578,12 +642,13 @@ def _build_eval_context(req: OptimizerRequest, calibration: dict | None) -> Eval
         min_ops=req.min_ops,
         min_test_ops=req.min_test_ops,
         search_space=req.search_space,
+        regime_enabled=req.regime_enabled,
     )
 
 
 def _current_result(req: OptimizerRequest, ctx: EvalContext) -> OptimizerResult:
     """Evaluate the live ``.env`` config (CURRENT mode)."""
-    cand = _candidate_from_env(req.pair)
+    cand = _candidate_from_env(req)
     ev = _evaluate(cand, ctx)
     return OptimizerResult(
         pair=req.pair,
