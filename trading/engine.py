@@ -39,12 +39,27 @@ class SidePolicy:
 
 
 @dataclass(frozen=True)
+class RegimePolicy:
+    """Trend/chop regime gate config. When ``enabled`` is False (the default),
+    the engine behaves exactly as before this feature existed. Thresholds are
+    expressed as *percentiles* and resolved to ER values against the working
+    dataframe inside ``simulate_operations`` (recompute philosophy)."""
+
+    enabled: bool = False
+    er_window: int = 32
+    chop_enter_pct: float = 0.33
+    chop_exit_pct: float = 0.40
+    trend_pct: float = 0.66
+
+
+@dataclass(frozen=True)
 class EngineConfig:
     pair: str
     calibration: PairCalibration
     buy: SidePolicy
     sell: SidePolicy
     atr_desv_limit: float
+    regime: RegimePolicy = RegimePolicy()  # default: disabled => no behavior change
 
 
 @dataclass(frozen=True)
@@ -210,6 +225,20 @@ def simulate_operations(
     cal = cfg.calibration
     atr_20, atr_50, atr_80, atr_95 = cal.atr_p20, cal.atr_p50, cal.atr_p80, cal.atr_p95
 
+    # Precompute the per-bar regime label (only when the gate is enabled). The
+    # array is aligned to df row position so the main loop can look it up by index.
+    regime_arr: list[str] | None = None
+    if cfg.regime.enabled and "close" in df.columns:
+        er = efficiency_ratio(df["close"].to_numpy(dtype=float), cfg.regime.er_window)
+        r_enter, r_exit, r_trend = resolve_er_thresholds(
+            er, cfg.regime.chop_enter_pct, cfg.regime.chop_exit_pct, cfg.regime.trend_pct
+        )
+        regime_arr = []
+        prev_regime: str | None = None
+        for v in er:
+            prev_regime = classify_regime(v, r_enter, r_exit, r_trend, prev_regime)
+            regime_arr.append(prev_regime)
+
     ops: list[Operation] = []
     # Track cumulative return in percent (compounded). Start at 0%.
     cum_pnl = 0.0
@@ -262,7 +291,7 @@ def simulate_operations(
     stop_px = None
     stop_atr = None
 
-    for _, row in df.iterrows():
+    for i, (_, row) in enumerate(df.iterrows()):
         atr = float(row["atr"])
         if atr <= 0 or np.isnan(atr):
             continue
@@ -298,6 +327,13 @@ def simulate_operations(
             gap = (activation_px - price) if side == "sell" else (price - activation_px)
             if gap > exp_dist:
                 activation_px = activation_price(cfg, side, price, activation_atr)
+
+            # Regime gate: while CHOP, do not activate. The position commits no
+            # capital until activation, so skipping the cross is the engine analog
+            # of blocking both creation and activation. Active positions (handled
+            # below, once `active` is True) are never gated.
+            if regime_arr is not None and regime_arr[i] == REGIME_CHOP:
+                continue
 
             # Activation check
             if side == "sell" and high >= activation_px:
