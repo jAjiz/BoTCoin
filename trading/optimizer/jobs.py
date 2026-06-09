@@ -51,7 +51,7 @@ class JobStore:
                 request=req.__dict__,
             )
             logging.info(
-                f"🔧 [Optimizer] Started for {req.pair}\nMode: {req.mode}\nJob: #{job_id}",
+                f"🔧 [Optimizer] Started for {req.pair} (job={job_id})\nMode: {req.mode}",
                 to_telegram=True,
             )
             future = _EXECUTOR.submit(_worker_func, req.__dict__, calibration)
@@ -82,13 +82,13 @@ class JobStore:
                     robust = best.get("robust_pnl_pct")
                     pnl_str = f"{robust:.2f}%" if robust is not None else "n/a"
                     logging.info(
-                        f"✅ [Optimizer] Completed for {active.pair}\nBest pnl: {pnl_str}",
+                        f"✅ [Optimizer] Completed for {active.pair} (job={active.job_id})\nBest pnl: {pnl_str}",
                         to_telegram=True,
                     )
             else:
                 db.fail_optimizer_job(active.job_id, str(payload))
                 logging.error(
-                    f"❌ [Optimizer] Failed for {active.pair}",
+                    f"❌ [Optimizer] Failed for {active.pair} (job={active.job_id})",
                     to_telegram=True,
                 )
         finally:
@@ -109,19 +109,19 @@ class JobStore:
             current_str = f"{current_robust:.2f}%" if current_robust is not None else "n/a"
             if payload.get("is_improvement"):
                 msg = (
-                    f"🚀 [AutoOptimize] {active.pair} — improvement found\n"
+                    f"🚀 [AutoOptimize] {active.pair} (job={active.job_id}) — improvement found\n"
                     f"Converged: {n_agreed}/{n_seeds} seeds, {n_conv} trials\n"
                     f"Current robust: {current_str} → New: {robust_str}\n"
                     f"{env_lines}"
                 )
             else:
                 msg = (
-                    f"ℹ️ [AutoOptimize] {active.pair} — current is better\n"  # noqa: RUF001 (intentional info emoji)
+                    f"ℹ️ [AutoOptimize] {active.pair} (job={active.job_id}) — current is better\n"  # noqa: RUF001 (intentional info emoji)
                     f"Converged: {n_agreed}/{n_seeds} seeds, {n_conv} trials\n"
                     f"{current_str} (current) vs {robust_str} (found) — no change needed"
                 )
         else:
-            msg = f"⚠️ [AutoOptimize] {active.pair} — no convergence reached\nBest found: {robust_str}"
+            msg = f"⚠️ [AutoOptimize] {active.pair} (job={active.job_id}) — no convergence reached\nBest found: {robust_str}"
         logging.info(msg, to_telegram=True)
 
     def shutdown(self) -> None:
