@@ -118,10 +118,11 @@ class JobStore:
                 msg = (
                     f"ℹ️ [AutoOptimize] {active.pair} (job={active.job_id}) — current is better\n"  # noqa: RUF001 (intentional info emoji)
                     f"Converged: {n_agreed}/{n_seeds} seeds, {n_conv} trials\n"
-                    f"{current_str} (current) vs {robust_str} (found) — no change needed"
+                    f"{current_str} (current) vs {robust_str} (found) — no change needed\n"
+                    f"{env_lines}"
                 )
         else:
-            msg = f"⚠️ [AutoOptimize] {active.pair} (job={active.job_id}) — no convergence reached\nBest found: {robust_str}"
+            msg = f"⚠️ [AutoOptimize] {active.pair} (job={active.job_id}) — no convergence reached\nBest found: {robust_str}\n{env_lines}"
         logging.info(msg, to_telegram=True)
 
     def shutdown(self) -> None:
