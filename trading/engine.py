@@ -14,6 +14,13 @@ import numpy as np
 # so this module stays a leaf with no project dependencies.
 LEVELS = ("LL", "LV", "MV", "HV", "HH")
 
+# Trend/chop regime labels (Efficiency Ratio classifier). Defined here because
+# engine.py is a leaf module; trading.market_analyzer re-exports these so the
+# live path and the engine share one implementation.
+REGIME_TREND = "TREND"
+REGIME_MIXED = "MIXED"
+REGIME_CHOP = "CHOP"
+
 
 @dataclass(frozen=True)
 class PairCalibration:
@@ -125,6 +132,73 @@ def stop_price(cfg: EngineConfig, side: str, trailing_price: float, atr_val: flo
     if side == "sell":
         return trailing_price - stop_distance
     return trailing_price + stop_distance
+
+
+# --- Trend/chop regime (Kaufman Efficiency Ratio) --------------------------
+
+
+def efficiency_ratio(close: np.ndarray, window: int) -> np.ndarray:
+    """Kaufman Efficiency Ratio over a rolling window.
+
+    ``ER[i] = |close[i] - close[i-N]| / sum(|close[j] - close[j-1]|, j in (i-N, i])``
+
+    Returns an array aligned to ``close``; the first ``window`` entries are NaN
+    (insufficient lookback), as are bars whose window is flat (zero path length).
+    A NaN is treated as non-CHOP by ``classify_regime`` (no gating).
+    """
+    close = np.asarray(close, dtype=float)
+    n = close.size
+    er = np.full(n, np.nan, dtype=float)
+    if window < 1 or n <= window:
+        return er
+    abs_steps = np.abs(np.diff(close))  # abs_steps[k] = |close[k+1] - close[k]|
+    for i in range(window, n):
+        net = abs(close[i] - close[i - window])
+        path = float(abs_steps[i - window : i].sum())
+        er[i] = (net / path) if path > 0 else np.nan
+    return er
+
+
+def resolve_er_thresholds(
+    er: np.ndarray, chop_enter_pct: float, chop_exit_pct: float, trend_pct: float
+) -> tuple[float, float, float]:
+    """Resolve percentile cut-points to ER *values* over the ER distribution.
+
+    Returns ``(er_chop_enter, er_chop_exit, er_trend)``. With ``chop_exit_pct >=
+    chop_enter_pct`` the exit value sits at or above the enter value, forming the
+    CHOP hysteresis dead band. NaNs in ``er`` are ignored; an all-NaN series
+    yields a degenerate ``(0.0, 0.0, 1.0)`` (never CHOP, never TREND).
+    """
+    valid = er[~np.isnan(er)]
+    if valid.size == 0:
+        return (0.0, 0.0, 1.0)
+    enter = float(np.percentile(valid, chop_enter_pct * 100.0))
+    exit_ = float(np.percentile(valid, chop_exit_pct * 100.0))
+    trend = float(np.percentile(valid, trend_pct * 100.0))
+    return enter, exit_, trend
+
+
+def classify_regime(
+    er_value: float | None,
+    er_chop_enter: float,
+    er_chop_exit: float,
+    er_trend: float,
+    prev_regime: str | None,
+) -> str:
+    """Map a single ER value to TREND/MIXED/CHOP with hysteresis on the CHOP
+    boundary. While in CHOP, stay until ER rises above ``er_chop_exit`` (the dead
+    band). The TREND boundary is a hard split (display-only, not load-bearing).
+    A ``None``/NaN ER holds the previous label (or MIXED when there is none)."""
+    if er_value is None or np.isnan(er_value):
+        return prev_regime or REGIME_MIXED
+    if prev_regime == REGIME_CHOP:
+        if er_value <= er_chop_exit:
+            return REGIME_CHOP
+    elif er_value < er_chop_enter:
+        return REGIME_CHOP
+    if er_value >= er_trend:
+        return REGIME_TREND
+    return REGIME_MIXED
 
 
 def simulate_operations(
