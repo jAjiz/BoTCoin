@@ -1,6 +1,5 @@
 import json
 import logging as stdlib_logging
-import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -27,7 +26,6 @@ from sqlalchemy import (
     update,
 )
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 from sqlalchemy.pool import QueuePool
@@ -270,7 +268,7 @@ class OptimizerJob(Base):
 
     __tablename__ = "optimizer_jobs"
 
-    id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
     pair = Column(Text, nullable=False)
     mode = Column(Text, nullable=False)
     split_method = Column(Text, nullable=False)
@@ -291,7 +289,7 @@ class OptimizerJob(Base):
 
     def to_dict(self) -> dict[str, Any]:
         return {
-            "id": str(self.id),
+            "id": self.id,
             "pair": self.pair,
             "mode": self.mode,
             "split_method": self.split_method,
@@ -743,7 +741,7 @@ def finalize_session(
 # ============================================================================
 
 
-def create_optimizer_job(pair: str, mode: str, split_method: str, request: dict[str, Any]) -> str:
+def create_optimizer_job(pair: str, mode: str, split_method: str, request: dict[str, Any]) -> int:
     """Insert a new job row with status='running' and started_at=now(). Returns job_id."""
     try:
         with get_session() as session:
@@ -757,13 +755,13 @@ def create_optimizer_job(pair: str, mode: str, split_method: str, request: dict[
             )
             session.add(row)
             session.flush()
-            return str(row.id)
+            return row.id
     except Exception as e:
         logger.error(f"Error creating optimizer job for {pair}: {e}")
         raise
 
 
-def complete_optimizer_job(job_id: str, result: dict[str, Any]) -> None:
+def complete_optimizer_job(job_id: int, result: dict[str, Any]) -> None:
     try:
         with get_session() as session:
             session.execute(
@@ -776,7 +774,7 @@ def complete_optimizer_job(job_id: str, result: dict[str, Any]) -> None:
         raise
 
 
-def fail_optimizer_job(job_id: str, error: str) -> None:
+def fail_optimizer_job(job_id: int, error: str) -> None:
     try:
         with get_session() as session:
             session.execute(
@@ -789,7 +787,7 @@ def fail_optimizer_job(job_id: str, error: str) -> None:
         raise
 
 
-def get_optimizer_job(job_id: str) -> dict[str, Any] | None:
+def get_optimizer_job(job_id: int) -> dict[str, Any] | None:
     try:
         with get_session() as session:
             record = session.query(OptimizerJob).filter(OptimizerJob.id == job_id).one_or_none()
