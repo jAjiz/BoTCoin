@@ -124,6 +124,16 @@ class SearchSpace(BaseModel):
         return self
 
 
+class AutoSettings(BaseModel):
+    """AUTO-mode convergence knobs, grouped (only meaningful for mode=AUTO). Unlike
+    SearchSpace these keep sensible defaults, so AUTO works without spelling them out."""
+
+    n_seeds: int = Field(default=4, ge=2, le=8)
+    min_agree: int = Field(default=3, ge=2, le=8)
+    trial_step: int = Field(default=500, ge=100, le=2_000)
+    max_trials: int = Field(default=9_000, ge=500, le=20_000)
+
+
 class OptimizerRequest(BaseModel):
     pair: str
     mode: Literal["OPTIMIZE", "CURRENT", "AUTO"]
@@ -135,20 +145,14 @@ class OptimizerRequest(BaseModel):
     min_test_ops: int = 0
     n_trials: int = Field(default=1_000, ge=1, le=10_000)
     seed: int = 42
-    # AUTO mode params (ignored for OPTIMIZE/CURRENT)
-    n_seeds: int = Field(default=4, ge=2, le=8)
-    min_agree: int = Field(default=3, ge=2, le=8)
-    trial_step: int = Field(default=500, ge=100, le=2_000)
-    max_trials: int = Field(default=9_000, ge=500, le=20_000)
-    # Search grids. Required for OPTIMIZE/AUTO (the search dimensions); ignored by
-    # CURRENT, which evaluates the live .env config and searches nothing.
+    # AUTO-mode knobs (ignored for OPTIMIZE/CURRENT). Omit to use defaults.
+    auto_settings: AutoSettings | None = None
+    # Search grids for OPTIMIZE/AUTO (the search dimensions); ignored by CURRENT,
+    # which evaluates the live .env config and searches nothing. The "required for
+    # OPTIMIZE/AUTO" rule is enforced at the route (not as a model validator) so
+    # this same model can echo a stored request back without re-failing historical
+    # jobs that predate the search_space field.
     search_space: SearchSpace | None = None
-
-    @model_validator(mode="after")
-    def _require_search_space(self) -> OptimizerRequest:
-        if self.mode in ("OPTIMIZE", "AUTO") and self.search_space is None:
-            raise ValueError("search_space is required for OPTIMIZE and AUTO modes")
-        return self
 
 
 class OptimizerJobAcceptedResponse(BaseModel):
@@ -156,14 +160,70 @@ class OptimizerJobAcceptedResponse(BaseModel):
     status: Literal["running"] = "running"
 
 
+# --- Optimizer job status (typed so the JSON output has a stable, grouped field
+# order; the underlying request/result columns are JSONB, which does not preserve
+# key order). All echo/result fields are optional so historical jobs still parse.
+
+
+class CandidateResult(BaseModel):
+    """One ranked candidate: config first, then its scores in evaluation order."""
+
+    k_act: float | None = None
+    min_margin: float | None = None
+    stop_pcts: dict[str, float] = Field(default_factory=dict)
+    in_sample_pnl_pct: float | None = None
+    train_pnl_pct: float | None = None
+    test_pnl_pct: float | None = None
+    robust_pnl_pct: float | None = None
+
+
+class AutoResult(BaseModel):
+    """AUTO-only consensus outcome, grouped (present only for AUTO results)."""
+
+    converged: bool = False
+    is_improvement: bool | None = None
+    n_seeds_agreed: int = 0
+    n_trials_at_convergence: int | None = None
+    current_robust_pnl: float | None = None
+    seeds_used: list[int] = Field(default_factory=list)
+
+
+_AUTO_RESULT_KEYS = (
+    "converged",
+    "is_improvement",
+    "n_seeds_agreed",
+    "n_trials_at_convergence",
+    "current_robust_pnl",
+    "seeds_used",
+)
+
+
+class OptimizerResultResponse(BaseModel):
+    """Typed optimizer result. pair/mode are dropped (shown once at the top level);
+    the AUTO-only fields are nested under ``auto`` (null for OPTIMIZE/CURRENT)."""
+
+    top_candidates: list[CandidateResult] = Field(default_factory=list)
+    suggested_env_lines: list[str] = Field(default_factory=list)
+    n_trials_run: int = 0
+    n_trials_pruned: int = 0
+    auto: AutoResult | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _nest_auto(cls, data):
+        """Stored results are flat (the OptimizerResult dataclass is unchanged). For
+        AUTO results, fold the AUTO-only keys into a nested ``auto`` object; for
+        OPTIMIZE/CURRENT leave it null. Extra flat keys are ignored by the model."""
+        if isinstance(data, dict) and data.get("mode") == "AUTO" and "auto" not in data:
+            data = {**data, "auto": {k: data.get(k) for k in _AUTO_RESULT_KEYS}}
+        return data
+
+
 class OptimizerJobStatusResponse(BaseModel):
     job_id: int
-    pair: str
-    mode: str
-    split_method: str
     status: Literal["running", "completed", "failed"]
-    request: dict
-    result: dict | None = None
+    request: OptimizerRequest  # carries pair/mode (shown once, here)
+    result: OptimizerResultResponse | None = None
     error: str | None = None
     created_at: datetime
     started_at: datetime | None = None

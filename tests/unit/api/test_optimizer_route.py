@@ -28,11 +28,24 @@ _JOB_ROW = {
     "mode": "OPTIMIZE",
     "split_method": "CONTINUE",
     "status": "completed",
-    "request": {"pair": _PAIR, "mode": "OPTIMIZE"},
+    "request": {"pair": _PAIR, "mode": "OPTIMIZE", "fee_pct": 0.4, "n_trials": 1000},
     "result": {
+        "pair": _PAIR,
+        "mode": "OPTIMIZE",
         "top_candidates": [
-            {"k_act": 0.0, "min_margin": None, "stop_pcts": {}, "robust_pnl_pct": 1.5},
-        ]
+            {
+                "k_act": 0.0,
+                "min_margin": None,
+                "stop_pcts": {},
+                "in_sample_pnl_pct": 2.0,
+                "train_pnl_pct": 1.8,
+                "test_pnl_pct": 1.5,
+                "robust_pnl_pct": 1.5,
+            },
+        ],
+        "suggested_env_lines": ["XBTEUR_K_ACT=0.0"],
+        "n_trials_run": 10,
+        "n_trials_pruned": 0,
     },
     "error": None,
     "created_at": _TS,
@@ -59,6 +72,15 @@ def test_submit_invalid_mode_returns_422(monkeypatch) -> None:
     client = _make_client(monkeypatch)
     resp = client.post("/optimizer/jobs", json={"pair": _PAIR, "mode": "AGGRESSIVE"})
     assert resp.status_code == 422
+
+
+@pytest.mark.parametrize("mode", ["OPTIMIZE", "AUTO"])
+def test_submit_without_search_space_returns_422(monkeypatch, mode: str) -> None:
+    """search_space is required for the search modes — enforced at the route."""
+    client = _make_client(monkeypatch)
+    resp = client.post("/optimizer/jobs", json={"pair": _PAIR, "mode": mode})
+    assert resp.status_code == 422
+    assert "search_space is required" in resp.json()["detail"]
 
 
 def test_submit_returns_202_with_job_id(monkeypatch) -> None:
@@ -111,3 +133,53 @@ def test_get_job_returns_status(monkeypatch, status: str) -> None:
     body = resp.json()
     assert body["status"] == status
     assert body["job_id"] == _JOB_ID
+
+
+def test_get_job_output_is_deduped_and_pruned(monkeypatch) -> None:
+    """pair/mode appear once — inside the echoed request, not at the top level nor
+    duplicated in the result; split_method is gone."""
+    monkeypatch.setattr(db, "get_optimizer_job", lambda jid: dict(_JOB_ROW))
+    client = _make_client(monkeypatch)
+    body = client.get(f"/optimizer/jobs/{_JOB_ID}").json()
+
+    assert "pair" not in body and "mode" not in body and "split_method" not in body
+    assert body["request"]["pair"] == _PAIR and body["request"]["mode"] == "OPTIMIZE"
+    assert "pair" not in body["result"] and "mode" not in body["result"]
+    # scores survive the typed candidate model
+    assert body["result"]["top_candidates"][0]["robust_pnl_pct"] == 1.5
+    # OPTIMIZE result has no AUTO block
+    assert body["result"]["auto"] is None
+
+
+def test_get_auto_job_nests_auto_fields(monkeypatch) -> None:
+    """AUTO result: the consensus fields are grouped under a nested `auto` object,
+    not repeated at the top level of the result."""
+    row = dict(
+        _JOB_ROW,
+        mode="AUTO",
+        request={"pair": _PAIR, "mode": "AUTO", "auto_settings": {"n_seeds": 4, "min_agree": 3}},
+        result={
+            "mode": "AUTO",
+            "top_candidates": [{"k_act": 0.0, "stop_pcts": {}, "robust_pnl_pct": 5.0}],
+            "suggested_env_lines": [],
+            "n_trials_run": 2000,
+            "n_trials_pruned": 0,
+            "converged": True,
+            "is_improvement": True,
+            "n_seeds_agreed": 3,
+            "n_trials_at_convergence": 2000,
+            "current_robust_pnl": -1.0,
+            "seeds_used": [1, 2, 3, 4],
+        },
+    )
+    monkeypatch.setattr(db, "get_optimizer_job", lambda jid: row)
+    client = _make_client(monkeypatch)
+    body = client.get(f"/optimizer/jobs/{_JOB_ID}").json()
+
+    auto = body["result"]["auto"]
+    assert auto["converged"] is True and auto["n_seeds_agreed"] == 3
+    assert auto["seeds_used"] == [1, 2, 3, 4]
+    # the AUTO fields are not duplicated at the result top level
+    assert "converged" not in body["result"] and "seeds_used" not in body["result"]
+    # the request echo groups the AUTO knobs
+    assert body["request"]["auto_settings"]["n_seeds"] == 4

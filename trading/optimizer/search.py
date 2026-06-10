@@ -70,6 +70,16 @@ class SearchSpace:
     min_margin: GridSpec | None
 
 
+@dataclass(frozen=True)
+class AutoSettings:
+    """AUTO-mode convergence knobs (mirrors the Pydantic AutoSettings)."""
+
+    n_seeds: int = 4
+    min_agree: int = 3
+    trial_step: int = 500
+    max_trials: int = 9_000
+
+
 def _grid_from_dict(d: dict | None) -> GridSpec | None:
     return None if d is None else GridSpec(**d)
 
@@ -268,11 +278,9 @@ class OptimizerRequest:
     min_test_ops: int = 0
     n_trials: int = 1_000
     seed: int = 42
-    # AUTO mode params
-    n_seeds: int = 4
-    min_agree: int = 3
-    trial_step: int = 500
-    max_trials: int = 9_000
+    # AUTO-mode knobs, grouped (None => defaults). Accepts an AutoSettings or the
+    # plain dict from model_dump()/asdict round-trips.
+    auto_settings: AutoSettings | None = None
     # Search grids (required for OPTIMIZE/AUTO, ignored by CURRENT). Accepts a
     # SearchSpace or the plain dict produced by model_dump()/asdict round-trips.
     search_space: SearchSpace | None = None
@@ -280,6 +288,8 @@ class OptimizerRequest:
     def __post_init__(self) -> None:
         if isinstance(self.search_space, dict):
             object.__setattr__(self, "search_space", _search_space_from_dict(self.search_space))
+        if isinstance(self.auto_settings, dict):
+            object.__setattr__(self, "auto_settings", AutoSettings(**self.auto_settings))
 
 
 @dataclass(frozen=True)
@@ -662,7 +672,8 @@ def _seed_result(
 def run_auto_optimize(req: OptimizerRequest, calibration: dict | None) -> OptimizerResult:
     if req.search_space is None:
         raise ValueError("search_space is required for OPTIMIZE/AUTO")
-    seeds = random.sample(range(1, 9999), req.n_seeds)
+    auto = req.auto_settings or AutoSettings()
+    seeds = random.sample(range(1, 9999), auto.n_seeds)
     # Load OHLC + calibration once, and keep each seed's studies alive across
     # escalation levels so adding trials *continues* the search (warm-start)
     # instead of restarting it from scratch at every level.
@@ -674,8 +685,8 @@ def run_auto_optimize(req: OptimizerRequest, calibration: dict | None) -> Optimi
 
     # One process pool for the whole search runs the kact/minmargin branches in
     # parallel (reused across seeds and escalation levels).
-    with _branch_executor(req.max_trials) as executor:
-        while n_trials <= req.max_trials:
+    with _branch_executor(auto.max_trials) as executor:
+        while n_trials <= auto.max_trials:
             last_results = []
             for seed in seeds:
                 # min_ops constraints not met → treat that seed as non-converging
@@ -683,7 +694,7 @@ def run_auto_optimize(req: OptimizerRequest, calibration: dict | None) -> Optimi
                 with contextlib.suppress(ValueError):
                     last_results.append(_seed_result(states[seed], n_trials, ctx, req, executor))
 
-            converged = _check_convergence(last_results, req.min_agree)
+            converged = _check_convergence(last_results, auto.min_agree)
             if converged is not None:
                 best, n_agreed = converged
                 current = _current_result(req, ctx)
@@ -706,7 +717,7 @@ def run_auto_optimize(req: OptimizerRequest, calibration: dict | None) -> Optimi
                     n_seeds_agreed=n_agreed,
                 )
 
-            n_trials += req.trial_step
+            n_trials += auto.trial_step
 
     # No convergence — return the best candidate from the last batch
     valid = [r for r in last_results if r.top_candidates]

@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from api.schemas import GridSpec as ApiGridSpec
 from api.schemas import OptimizerRequest as ApiOptimizerRequest
 from api.schemas import SearchSpace as ApiSearchSpace
-from trading.optimizer.search import GridSpec, OptimizerRequest, SearchSpace
+from trading.optimizer.search import AutoSettings, GridSpec, OptimizerRequest, SearchSpace
 
 
 def _api_space() -> dict:
@@ -70,19 +70,13 @@ def test_searchspace_branches_are_required_fields() -> None:
 # --- OptimizerRequest mode/search_space interaction ------------------------
 
 
-def test_request_requires_search_space_for_optimize() -> None:
-    with pytest.raises(ValidationError, match="search_space is required"):
-        ApiOptimizerRequest(pair="XBTEUR", mode="OPTIMIZE")
-
-
-def test_request_requires_search_space_for_auto() -> None:
-    with pytest.raises(ValidationError, match="search_space is required"):
-        ApiOptimizerRequest(pair="XBTEUR", mode="AUTO")
-
-
-def test_request_current_allows_no_search_space() -> None:
-    req = ApiOptimizerRequest(pair="XBTEUR", mode="CURRENT")
-    assert req.search_space is None
+def test_request_model_allows_missing_search_space() -> None:
+    """The model itself does NOT require search_space (the OPTIMIZE/AUTO rule is
+    enforced at the route). This lets the same model echo historical requests back.
+    See the route tests for the 422-on-submit behaviour."""
+    for mode in ("OPTIMIZE", "AUTO", "CURRENT"):
+        req = ApiOptimizerRequest(pair="XBTEUR", mode=mode)
+        assert req.search_space is None
 
 
 # --- dict -> dataclass coercion round-trip ---------------------------------
@@ -113,3 +107,16 @@ def test_dataclass_search_space_asdict_round_trips() -> None:
     req2 = OptimizerRequest(pair="XBTEUR", mode="OPTIMIZE", search_space=rt)
     assert req2.search_space.k_act is None
     assert req2.search_space.min_margin.step == 0.002
+
+
+def test_dataclass_coerces_dict_auto_settings() -> None:
+    """auto_settings, like search_space, accepts the plain dict round-trip."""
+    req = OptimizerRequest(
+        pair="XBTEUR",
+        mode="AUTO",
+        search_space=_api_space(),
+        auto_settings={"n_seeds": 5, "min_agree": 4, "trial_step": 250, "max_trials": 3000},
+    )
+    assert isinstance(req.auto_settings, AutoSettings)
+    assert req.auto_settings.n_seeds == 5
+    assert asdict(req)["auto_settings"]["max_trials"] == 3000

@@ -8,6 +8,7 @@ import pytest
 import core.config as config
 import trading.optimizer.search as optimizer
 from trading.optimizer.search import (
+    AutoSettings,
     GridSpec,
     OptimizerRequest,
     OptimizerResult,
@@ -215,9 +216,7 @@ def test_auto_converges_first_batch_improvement(monkeypatch) -> None:
         current_robust=-3.7,
     )
 
-    req = OptimizerRequest(
-        pair=_PAIR, mode="AUTO", n_trials=1000, trial_step=500, max_trials=9000, min_agree=3, search_space=_space()
-    )
+    req = OptimizerRequest(pair=_PAIR, mode="AUTO", n_trials=1000, auto_settings=AutoSettings(), search_space=_space())
     out = run_auto_optimize(req, calibration=None)
 
     assert out.mode == "AUTO"
@@ -237,7 +236,7 @@ def test_auto_converges_but_current_is_better(monkeypatch) -> None:
         current_robust=9.0,
     )
 
-    req = OptimizerRequest(pair=_PAIR, mode="AUTO", n_trials=1000, min_agree=3, search_space=_space())
+    req = OptimizerRequest(pair=_PAIR, mode="AUTO", n_trials=1000, auto_settings=AutoSettings(), search_space=_space())
     out = run_auto_optimize(req, calibration=None)
 
     assert out.converged is True
@@ -257,9 +256,7 @@ def test_auto_escalates_until_convergence(monkeypatch) -> None:
 
     _patch_auto(monkeypatch, seed_fn=_seed_fn, current_robust=0.0)
 
-    req = OptimizerRequest(
-        pair=_PAIR, mode="AUTO", n_trials=1000, trial_step=500, max_trials=9000, min_agree=3, search_space=_space()
-    )
+    req = OptimizerRequest(pair=_PAIR, mode="AUTO", n_trials=1000, auto_settings=AutoSettings(), search_space=_space())
     out = run_auto_optimize(req, calibration=None)
 
     assert out.converged is True
@@ -276,7 +273,11 @@ def test_auto_no_convergence_returns_best_fallback(monkeypatch) -> None:
     )
 
     req = OptimizerRequest(
-        pair=_PAIR, mode="AUTO", n_trials=1000, trial_step=500, max_trials=2000, min_agree=3, search_space=_space()
+        pair=_PAIR,
+        mode="AUTO",
+        n_trials=1000,
+        auto_settings=AutoSettings(max_trials=2000),
+        search_space=_space(),
     )
     out = run_auto_optimize(req, calibration=None)
 
