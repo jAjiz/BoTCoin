@@ -108,24 +108,18 @@ class JobStore:
         env_lines = "\n".join(payload.get("suggested_env_lines") or [])
 
         if payload.get("converged"):
-            current_robust = payload.get("current_robust_pnl")
-            current_str = f"{current_robust:.2f}%" if current_robust is not None else "n/a"
-            if payload.get("is_improvement"):
-                msg = (
-                    f"🚀 [AutoOptimize] {active.pair} (job={active.job_id}) — improvement found\n"
-                    f"Converged: {n_agreed}/{n_seeds} seeds, {n_conv} trials\n"
-                    f"Current robust: {current_str} → New: {robust_str}\n"
-                    f"{env_lines}"
-                )
-            else:
-                msg = (
-                    f"ℹ️ [AutoOptimize] {active.pair} (job={active.job_id}) — current is better\n"  # noqa: RUF001 (intentional info emoji)
-                    f"Converged: {n_agreed}/{n_seeds} seeds, {n_conv} trials\n"
-                    f"{current_str} (current) vs {robust_str} (found) — no change needed\n"
-                    f"{env_lines}"
-                )
+            msg = (
+                f"✅ [AutoOptimize] {active.pair} (job={active.job_id}) — converged\n"
+                f"{n_agreed}/{n_seeds} seeds, {n_conv} trials\n"
+                f"Best robust: {robust_str}\n"
+                f"{env_lines}"
+            )
         else:
-            msg = f"⚠️ [AutoOptimize] {active.pair} (job={active.job_id}) — no convergence reached\nBest found: {robust_str}\n{env_lines}"
+            msg = (
+                f"⚠️ [AutoOptimize] {active.pair} (job={active.job_id}) — no convergence reached\n"
+                f"Best found: {robust_str}\n"
+                f"{env_lines}"
+            )
         logging.info(msg, to_telegram=True)
 
     def shutdown(self) -> None:

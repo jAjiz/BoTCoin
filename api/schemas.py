@@ -178,22 +178,19 @@ class CandidateResult(BaseModel):
 
 
 class AutoResult(BaseModel):
-    """AUTO-only consensus outcome, grouped (present only for AUTO results)."""
+    """AUTO-only consensus outcome, grouped (present only for AUTO results).
+    Comparing the winner against the live config is a separate concern (CURRENT mode)."""
 
     converged: bool = False
-    is_improvement: bool | None = None
     n_seeds_agreed: int = 0
     n_trials_at_convergence: int | None = None
-    current_robust_pnl: float | None = None
     seeds_used: list[int] = Field(default_factory=list)
 
 
 _AUTO_RESULT_KEYS = (
     "converged",
-    "is_improvement",
     "n_seeds_agreed",
     "n_trials_at_convergence",
-    "current_robust_pnl",
     "seeds_used",
 )
 

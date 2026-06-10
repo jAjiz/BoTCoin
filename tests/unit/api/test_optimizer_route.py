@@ -165,10 +165,8 @@ def test_get_auto_job_nests_auto_fields(monkeypatch) -> None:
             "n_trials_run": 2000,
             "n_trials_pruned": 0,
             "converged": True,
-            "is_improvement": True,
             "n_seeds_agreed": 3,
             "n_trials_at_convergence": 2000,
-            "current_robust_pnl": -1.0,
             "seeds_used": [1, 2, 3, 4],
         },
     )
@@ -179,6 +177,8 @@ def test_get_auto_job_nests_auto_fields(monkeypatch) -> None:
     auto = body["result"]["auto"]
     assert auto["converged"] is True and auto["n_seeds_agreed"] == 3
     assert auto["seeds_used"] == [1, 2, 3, 4]
+    # AUTO reports only the search outcome — no comparison against current
+    assert "is_improvement" not in auto and "current_robust_pnl" not in auto
     # the AUTO fields are not duplicated at the result top level
     assert "converged" not in body["result"] and "seeds_used" not in body["result"]
     # the request echo groups the AUTO knobs

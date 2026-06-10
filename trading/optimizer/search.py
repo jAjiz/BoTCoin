@@ -300,10 +300,10 @@ class OptimizerResult:
     suggested_env_lines: list[str]  # formatted .env lines for top_candidates[0]
     n_trials_run: int
     n_trials_pruned: int
-    # AUTO mode extra fields (None/False/[] for OPTIMIZE and CURRENT results)
+    # AUTO mode extra fields (False/[]/None for OPTIMIZE and CURRENT results).
+    # AUTO reports only the search outcome; comparing against the live config is a
+    # separate concern (use CURRENT mode).
     converged: bool = False
-    is_improvement: bool | None = None
-    current_robust_pnl: float | None = None
     seeds_used: list = field(default_factory=list)
     n_trials_at_convergence: int | None = None
     n_seeds_agreed: int = 0
@@ -588,7 +588,7 @@ def _build_eval_context(req: OptimizerRequest, calibration: dict | None) -> Eval
 
 
 def _current_result(req: OptimizerRequest, ctx: EvalContext) -> OptimizerResult:
-    """Evaluate the live ``.env`` config (CURRENT mode / AUTO's baseline)."""
+    """Evaluate the live ``.env`` config (CURRENT mode)."""
     cand = _candidate_from_env(req.pair)
     ev = _evaluate(cand, ctx)
     return OptimizerResult(
@@ -697,11 +697,6 @@ def run_auto_optimize(req: OptimizerRequest, calibration: dict | None) -> Optimi
             converged = _check_convergence(last_results, auto.min_agree)
             if converged is not None:
                 best, n_agreed = converged
-                current = _current_result(req, ctx)
-                current_robust = (
-                    (current.top_candidates[0].get("robust_pnl_pct") or -1e18) if current.top_candidates else -1e18
-                )
-                best_robust = (best.top_candidates[0].get("robust_pnl_pct") or -1e18) if best.top_candidates else -1e18
                 return OptimizerResult(
                     pair=req.pair,
                     mode="AUTO",
@@ -710,8 +705,6 @@ def run_auto_optimize(req: OptimizerRequest, calibration: dict | None) -> Optimi
                     n_trials_run=best.n_trials_run,
                     n_trials_pruned=best.n_trials_pruned,
                     converged=True,
-                    is_improvement=best_robust > current_robust,
-                    current_robust_pnl=current_robust if current_robust > -1e17 else None,
                     seeds_used=seeds,
                     n_trials_at_convergence=n_trials,
                     n_seeds_agreed=n_agreed,
