@@ -15,6 +15,13 @@ _PAIRS = {_PAIR: {}}
 _JOB_ID = 1
 _TS = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
 
+# Minimal valid search space — OPTIMIZE/AUTO now require it at the schema level.
+_SPACE = {
+    "stop_pcts": {"start": 0.20, "end": 0.95, "step": 0.25},
+    "k_act": {"start": 0.0, "end": 4.0, "step": 1.0},
+    "min_margin": None,
+}
+
 _JOB_ROW = {
     "id": _JOB_ID,
     "pair": _PAIR,
@@ -43,7 +50,7 @@ def _make_client(monkeypatch) -> TestClient:
 
 def test_submit_unknown_pair_returns_400(monkeypatch) -> None:
     client = _make_client(monkeypatch)
-    resp = client.post("/optimizer/jobs", json={"pair": "UNKNOWN", "mode": "OPTIMIZE"})
+    resp = client.post("/optimizer/jobs", json={"pair": "UNKNOWN", "mode": "OPTIMIZE", "search_space": _SPACE})
     assert resp.status_code == 400
     assert "Unknown pair" in resp.json()["detail"]
 
@@ -57,7 +64,7 @@ def test_submit_invalid_mode_returns_422(monkeypatch) -> None:
 def test_submit_returns_202_with_job_id(monkeypatch) -> None:
     monkeypatch.setattr(optimizer_route.JOB_STORE, "try_start", lambda req: _JOB_ID)
     client = _make_client(monkeypatch)
-    resp = client.post("/optimizer/jobs", json={"pair": _PAIR, "mode": "OPTIMIZE"})
+    resp = client.post("/optimizer/jobs", json={"pair": _PAIR, "mode": "OPTIMIZE", "search_space": _SPACE})
     assert resp.status_code == 202
     body = resp.json()
     assert body["job_id"] == _JOB_ID
@@ -67,7 +74,7 @@ def test_submit_returns_202_with_job_id(monkeypatch) -> None:
 def test_submit_disabled_returns_503(monkeypatch) -> None:
     monkeypatch.setattr(optimizer_route, "MAX_CONCURRENT_JOBS", 0)
     client = _make_client(monkeypatch)
-    resp = client.post("/optimizer/jobs", json={"pair": _PAIR, "mode": "OPTIMIZE"})
+    resp = client.post("/optimizer/jobs", json={"pair": _PAIR, "mode": "OPTIMIZE", "search_space": _SPACE})
     assert resp.status_code == 503
     assert "disabled" in resp.json()["detail"].lower()
 
@@ -78,7 +85,7 @@ def test_submit_busy_returns_409(monkeypatch) -> None:
 
     monkeypatch.setattr(optimizer_route.JOB_STORE, "try_start", _busy)
     client = _make_client(monkeypatch)
-    resp = client.post("/optimizer/jobs", json={"pair": _PAIR, "mode": "OPTIMIZE"})
+    resp = client.post("/optimizer/jobs", json={"pair": _PAIR, "mode": "OPTIMIZE", "search_space": _SPACE})
     assert resp.status_code == 409
 
 

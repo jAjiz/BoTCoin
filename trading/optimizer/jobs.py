@@ -1,7 +1,7 @@
 import asyncio
 import threading
 from concurrent.futures import Future, ProcessPoolExecutor
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from multiprocessing import get_context
 
 import core.database as db
@@ -44,17 +44,20 @@ class JobStore:
             calibration = None
             if not req.start and not req.end:
                 calibration = runtime.get_pair_calibration(req.pair)
+            # asdict (not __dict__) so a nested SearchSpace is fully dict-ified —
+            # JSONB-serializable for the DB row and picklable for the worker.
+            req_dict = asdict(req)
             job_id = db.create_optimizer_job(
                 pair=req.pair,
                 mode=req.mode,
                 split_method="CONTINUE",
-                request=req.__dict__,
+                request=req_dict,
             )
             logging.info(
                 f"🔧 [Optimizer] Started for {req.pair} (job={job_id})\nMode: {req.mode}",
                 to_telegram=True,
             )
-            future = _EXECUTOR.submit(_worker_func, req.__dict__, calibration)
+            future = _EXECUTOR.submit(_worker_func, req_dict, calibration)
             self._active[job_id] = _ActiveJob(job_id=job_id, future=future, pair=req.pair)
             return job_id
 
