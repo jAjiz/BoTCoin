@@ -102,7 +102,7 @@ class JobStore:
         best = (payload.get("top_candidates") or [{}])[0]
         robust = best.get("robust_pnl_pct")
         robust_str = f"{robust:.2f}%" if robust is not None else "n/a"
-        n_conv = payload.get("n_trials_at_convergence")
+        n_trials = payload.get("n_trials_run")
         n_agreed = payload.get("n_seeds_agreed", 0)
         n_seeds = len(payload.get("seeds_used") or [])
         env_lines = "\n".join(payload.get("suggested_env_lines") or [])
@@ -110,7 +110,7 @@ class JobStore:
         if payload.get("converged"):
             msg = (
                 f"✅ [AutoOptimize] {active.pair} (job={active.job_id}) — converged\n"
-                f"{n_agreed}/{n_seeds} seeds, {n_conv} trials\n"
+                f"{n_agreed}/{n_seeds} seeds, {n_trials} trials\n"
                 f"Best robust: {robust_str}\n"
                 f"{env_lines}"
             )

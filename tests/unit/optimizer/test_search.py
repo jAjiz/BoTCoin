@@ -68,7 +68,6 @@ def _result(robust: float, *, mode: str = "OPTIMIZE", k_act: float = 0.0) -> Opt
         top_candidates=[{"k_act": k_act, "min_margin": None, "stop_pcts": {}, "robust_pnl_pct": robust}],
         suggested_env_lines=[f"{_PAIR}_K_ACT={k_act}"],
         n_trials_run=10,
-        n_trials_pruned=0,
     )
 
 
@@ -221,7 +220,7 @@ def test_auto_converges_first_batch(monkeypatch) -> None:
     assert out.mode == "AUTO"
     assert out.converged is True
     assert out.n_seeds_agreed == 3
-    assert out.n_trials_at_convergence == 1000
+    assert out.n_trials_run == 1000
     assert out.seeds_used == [11, 22, 33, 44]
     # the winning config is the one the 3 agreeing seeds found
     assert out.top_candidates[0]["k_act"] == 1.0
@@ -243,7 +242,7 @@ def test_auto_escalates_until_convergence(monkeypatch) -> None:
     out = run_auto_optimize(req, calibration=None)
 
     assert out.converged is True
-    assert out.n_trials_at_convergence == 1500
+    assert out.n_trials_run == 1500
 
 
 def test_auto_no_convergence_returns_best_fallback(monkeypatch) -> None:

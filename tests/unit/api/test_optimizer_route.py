@@ -163,10 +163,8 @@ def test_get_auto_job_nests_auto_fields(monkeypatch) -> None:
             "top_candidates": [{"k_act": 0.0, "stop_pcts": {}, "robust_pnl_pct": 5.0}],
             "suggested_env_lines": [],
             "n_trials_run": 2000,
-            "n_trials_pruned": 0,
             "converged": True,
             "n_seeds_agreed": 3,
-            "n_trials_at_convergence": 2000,
             "seeds_used": [1, 2, 3, 4],
         },
     )

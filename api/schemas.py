@@ -183,14 +183,12 @@ class AutoResult(BaseModel):
 
     converged: bool = False
     n_seeds_agreed: int = 0
-    n_trials_at_convergence: int | None = None
     seeds_used: list[int] = Field(default_factory=list)
 
 
 _AUTO_RESULT_KEYS = (
     "converged",
     "n_seeds_agreed",
-    "n_trials_at_convergence",
     "seeds_used",
 )
 
@@ -202,7 +200,6 @@ class OptimizerResultResponse(BaseModel):
     top_candidates: list[CandidateResult] = Field(default_factory=list)
     suggested_env_lines: list[str] = Field(default_factory=list)
     n_trials_run: int = 0
-    n_trials_pruned: int = 0
     auto: AutoResult | None = None
 
     @model_validator(mode="before")

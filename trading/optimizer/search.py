@@ -299,13 +299,11 @@ class OptimizerResult:
     top_candidates: list[dict]  # top 5 unique; each has candidate params + scores
     suggested_env_lines: list[str]  # formatted .env lines for top_candidates[0]
     n_trials_run: int
-    n_trials_pruned: int
     # AUTO mode extra fields (False/[]/None for OPTIMIZE and CURRENT results).
     # AUTO reports only the search outcome; comparing against the live config is a
     # separate concern (use CURRENT mode).
     converged: bool = False
     seeds_used: list = field(default_factory=list)
-    n_trials_at_convergence: int | None = None
     n_seeds_agreed: int = 0
 
 
@@ -457,12 +455,12 @@ def _advance_seed_to(
     target_n_trials: int,
     ctx: EvalContext,
     executor: ProcessPoolExecutor | None = None,
-) -> tuple[list[tuple], int, int]:
+) -> tuple[list[tuple], int]:
     """Warm-start: add trials to each active branch until it reaches its share of
     ``target_n_trials``, running only the delta. When ``executor`` is given and
     more than one branch has work, the studies are advanced in parallel (one
     process each) and the advanced copies shipped back. Returns the merged
-    (completed, n_pruned, n_total) across all active branches."""
+    (completed, n_total) across all active branches."""
     branches = list(state.studies)
     targets = _split_budget(target_n_trials, branches)
     deltas = {b: targets[b] - state.done[b] for b in branches}
@@ -479,13 +477,12 @@ def _advance_seed_to(
         state.done[b] = targets[b]
 
     completed = [t for s in state.studies.values() for t in _collect_completed(s)]
-    n_pruned = sum(1 for s in state.studies.values() for t in s.trials if t.state == optuna.trial.TrialState.PRUNED)
     n_total = sum(len(s.trials) for s in state.studies.values())
-    return completed, n_pruned, n_total
+    return completed, n_total
 
 
 def _result_from_completed(
-    req: OptimizerRequest, all_completed: list[tuple], n_pruned: int, n_total: int
+    req: OptimizerRequest, all_completed: list[tuple], n_total: int
 ) -> OptimizerResult:
     """Rank, deduplicate and format the completed trials into an OptimizerResult.
     Shared by single OPTIMIZE runs and each AUTO seed."""
@@ -530,7 +527,6 @@ def _result_from_completed(
         top_candidates=[_trial_dict(p, v, ua) for p, v, ua in top],
         suggested_env_lines=_format_env_lines(req.pair, best_cand),
         n_trials_run=n_total,
-        n_trials_pruned=n_pruned,
     )
 
 
@@ -597,7 +593,6 @@ def _current_result(req: OptimizerRequest, ctx: EvalContext) -> OptimizerResult:
         top_candidates=[{**_candidate_to_dict(cand), **_scores_dict(ev)}],
         suggested_env_lines=_format_env_lines(req.pair, cand),
         n_trials_run=1,
-        n_trials_pruned=0,
     )
 
 
@@ -663,10 +658,10 @@ def _seed_result(
     """Advance one seed's studies to ``target_n_trials`` (warm-start) and build
     its OptimizerResult. Shared by single OPTIMIZE runs and each AUTO seed; the
     AUTO seam is mocked in tests to steer convergence."""
-    completed, n_pruned, n_total = _advance_seed_to(state, target_n_trials, ctx, executor)
+    completed, n_total = _advance_seed_to(state, target_n_trials, ctx, executor)
     if not completed:
         raise ValueError("No candidate met the min_ops / min_test_ops constraints")
-    return _result_from_completed(req, completed, n_pruned, n_total)
+    return _result_from_completed(req, completed, n_total)
 
 
 def run_auto_optimize(req: OptimizerRequest, calibration: dict | None) -> OptimizerResult:
@@ -702,11 +697,9 @@ def run_auto_optimize(req: OptimizerRequest, calibration: dict | None) -> Optimi
                     mode="AUTO",
                     top_candidates=best.top_candidates,
                     suggested_env_lines=best.suggested_env_lines,
-                    n_trials_run=best.n_trials_run,
-                    n_trials_pruned=best.n_trials_pruned,
+                    n_trials_run=n_trials,
                     converged=True,
                     seeds_used=seeds,
-                    n_trials_at_convergence=n_trials,
                     n_seeds_agreed=n_agreed,
                 )
 
@@ -722,8 +715,9 @@ def run_auto_optimize(req: OptimizerRequest, calibration: dict | None) -> Optimi
         mode="AUTO",
         top_candidates=best_fallback.top_candidates,
         suggested_env_lines=best_fallback.suggested_env_lines,
-        n_trials_run=best_fallback.n_trials_run,
-        n_trials_pruned=best_fallback.n_trials_pruned,
+        n_trials_run=n_trials - auto.trial_step,
         converged=False,
         seeds_used=seeds,
     )
+
+

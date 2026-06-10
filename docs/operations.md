@@ -226,7 +226,7 @@ a single continuous run (no mid-history reset).
 A completed job's `result` holds the ranked `top_candidates` (each with its
 `k_act`/`min_margin`, per-level stop percentiles, and in-sample/train/test/robust
 PnL) and ready-to-paste `suggested_env_lines`. AUTO results additionally report
-`converged`, `seeds_used`, `n_seeds_agreed`, and `n_trials_at_convergence`. To check
+`converged`, `seeds_used`, `n_seeds_agreed`. To check
 whether the winner beats the live config, run `CURRENT` and compare the robust PnL.
 Applying them is manual: copy the suggested lines into `.env` and redeploy (hot-reload
 of trading parameters is future work).
