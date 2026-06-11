@@ -4,8 +4,9 @@ Pure ``run_optimize(req, calibration) -> OptimizerResult``: two Optuna TPE
 searches (k_act branch and min_margin branch) over per-level stop percentiles.
 The trial budget is split evenly across the *active* branches; results are merged
 and ranked globally by robust_pnl. The search grids (stop percentiles, k_act,
-min_margin) are supplied per request via ``SearchSpace`` — there are no built-in
-defaults, and a ``None`` activation grid disables that whole branch.
+min_margin, and optionally the four regime dimensions) are supplied per request
+via ``SearchSpace`` — there are no built-in defaults, and a ``None`` activation
+grid disables that whole branch.
 
 ``run_auto_optimize`` runs several seeds and escalates the trial budget until a
 majority of seeds *agree on the same config* (param signature, not just the same
@@ -45,14 +46,6 @@ optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 MODES = ("OPTIMIZE", "CURRENT", "AUTO")
 
-# Regime (Phase 11) search space + fixed derived params. The search varies only
-# the ER window and the CHOP-enter percentile; the exit percentile is the enter
-# plus a fixed dead band (hysteresis) and the TREND split is display-only.
-_ER_WINDOW_CHOICES = (16, 24, 32, 48, 64, 96)
-_CHOP_ENTER_CHOICES = (0.25, 0.30, 0.33, 0.40, 0.50)
-_REGIME_CHOP_DEAD_BAND = 0.07
-_REGIME_TREND_PCT = 0.66
-
 
 # --- search space ----------------------------------------------------------
 
@@ -69,13 +62,27 @@ class GridSpec:
 
 
 @dataclass(frozen=True)
+class RegimeSpace:
+    """Search grids for the four regime-filter dimensions (mirrors the Pydantic
+    RegimeSpace in api.schemas). All use ``suggest_float``; ``er_window`` values
+    are integers by convention (step >= 1)."""
+
+    er_window: GridSpec
+    chop_enter_pct: GridSpec
+    chop_dead_band: GridSpec
+    trend_pct: GridSpec
+
+
+@dataclass(frozen=True)
 class SearchSpace:
     """Per-request search grids. ``k_act``/``min_margin`` None disables that
-    branch (at least one must be set); ``stop_pcts`` applies to every level."""
+    branch (at least one must be set); ``stop_pcts`` applies to every level.
+    ``regime`` is optional; when provided the four regime dimensions are searched."""
 
     stop_pcts: GridSpec
     k_act: GridSpec | None
     min_margin: GridSpec | None
+    regime: RegimeSpace | None = None
 
 
 @dataclass(frozen=True)
@@ -92,6 +99,17 @@ def _grid_from_dict(d: dict | None) -> GridSpec | None:
     return None if d is None else GridSpec(**d)
 
 
+def _regime_space_from_dict(d: dict | None) -> RegimeSpace | None:
+    if d is None:
+        return None
+    return RegimeSpace(
+        er_window=GridSpec(**d["er_window"]),
+        chop_enter_pct=GridSpec(**d["chop_enter_pct"]),
+        chop_dead_band=GridSpec(**d["chop_dead_band"]),
+        trend_pct=GridSpec(**d["trend_pct"]),
+    )
+
+
 def _search_space_from_dict(d: dict) -> SearchSpace:
     """Coerce a plain dict (from ``model_dump``/``asdict`` round-trips) into a
     SearchSpace. Lets the request cross the API → dataclass → worker boundaries."""
@@ -99,6 +117,7 @@ def _search_space_from_dict(d: dict) -> SearchSpace:
         stop_pcts=GridSpec(**d["stop_pcts"]),
         k_act=_grid_from_dict(d.get("k_act")),
         min_margin=_grid_from_dict(d.get("min_margin")),
+        regime=_regime_space_from_dict(d.get("regime")),
     )
 
 
@@ -138,9 +157,11 @@ class Candidate:
     k_act: float | None
     min_margin: float | None
     stop_pcts: dict[str, float]
-    # Regime gate (Phase 11). Both None => gate disabled for this candidate.
+    # Regime gate (Phase 11). All None => gate disabled for this candidate.
     er_window: int | None = None
     chop_enter_pct: float | None = None
+    chop_dead_band: float | None = None
+    trend_pct: float | None = None
 
 
 @dataclass(frozen=True)
@@ -186,8 +207,11 @@ def _format_env_lines(pair: str, cand: Candidate) -> list[str]:
     lines.append(f"{pair}_STOP_PCT_HV={cand.stop_pcts['HV']:.2f}")
     lines.append(f"{pair}_STOP_PCT_HH={cand.stop_pcts['HH']:.2f}")
     if cand.er_window is not None and cand.chop_enter_pct is not None:
+        chop_exit = min(cand.chop_enter_pct + (cand.chop_dead_band or 0.0), 1.0)
         lines.append(f"{pair}_ER_WINDOW={int(cand.er_window)}")
         lines.append(f"{pair}_ER_CHOP_ENTER_PCT={cand.chop_enter_pct:.2f}")
+        lines.append(f"{pair}_ER_CHOP_EXIT_PCT={chop_exit:.2f}")
+        lines.append(f"{pair}_ER_TREND_PCT={cand.trend_pct:.2f}")
     return lines
 
 
@@ -206,8 +230,16 @@ def _candidate_from_env(req: "OptimizerRequest") -> Candidate:
     stop_pcts = {lvl: float(STOP_PERCENTILES[pair][lvl]) for lvl in LEVELS}
     er_window = req.er_window if req.regime_enabled else None
     chop_enter = req.chop_enter_pct if req.regime_enabled else None
+    chop_dead_band = req.chop_dead_band if req.regime_enabled else None
+    trend_pct = req.trend_pct if req.regime_enabled else None
     return Candidate(
-        k_act=k_act, min_margin=min_margin, stop_pcts=stop_pcts, er_window=er_window, chop_enter_pct=chop_enter
+        k_act=k_act,
+        min_margin=min_margin,
+        stop_pcts=stop_pcts,
+        er_window=er_window,
+        chop_enter_pct=chop_enter,
+        chop_dead_band=chop_dead_band,
+        trend_pct=trend_pct,
     )
 
 
@@ -223,6 +255,8 @@ def _candidate_to_dict(cand: Candidate) -> dict:
         "stop_pcts": {lvl: _round2(p) for lvl, p in cand.stop_pcts.items()},
         "er_window": cand.er_window,
         "chop_enter_pct": _round2(cand.chop_enter_pct),
+        "chop_dead_band": _round2(cand.chop_dead_band),
+        "trend_pct": _round2(cand.trend_pct),
     }
 
 
@@ -251,8 +285,8 @@ def _build_engine_config(
             enabled=True,
             er_window=int(cand.er_window),
             chop_enter_pct=float(cand.chop_enter_pct),
-            chop_exit_pct=min(float(cand.chop_enter_pct) + _REGIME_CHOP_DEAD_BAND, 1.0),
-            trend_pct=_REGIME_TREND_PCT,
+            chop_exit_pct=min(float(cand.chop_enter_pct) + float(cand.chop_dead_band or 0.0), 1.0),
+            trend_pct=float(cand.trend_pct or 0.66),
         )
     return EngineConfig(
         pair=pair, calibration=calibration, buy=side, sell=side, atr_desv_limit=atr_desv_limit, regime=regime
@@ -270,46 +304,71 @@ def _suggest_stops(trial: optuna.Trial, grid: GridSpec) -> dict[str, float]:
     return {lvl: trial.suggest_float(f"stop_pct_{lvl}", grid.start, grid.end, step=grid.step) for lvl in LEVELS}
 
 
-def _suggest_regime(trial: optuna.Trial, regime_enabled: bool) -> tuple[int | None, float | None]:
-    """Suggest the two regime dimensions when the gate is enabled, else (None, None)."""
-    if not regime_enabled:
-        return None, None
-    er_window = trial.suggest_categorical("er_window", list(_ER_WINDOW_CHOICES))
-    chop_enter = trial.suggest_categorical("chop_enter_pct", list(_CHOP_ENTER_CHOICES))
-    return er_window, chop_enter
+def _suggest_regime(
+    trial: optuna.Trial, regime: RegimeSpace | None
+) -> tuple[int | None, float | None, float | None, float | None]:
+    """Suggest the four regime dimensions when a RegimeSpace is provided, else
+    return (None, None, None, None). All use suggest_float so TPE retains ordinal
+    structure; er_window is cast to int at suggestion time."""
+    if regime is None:
+        return None, None, None, None
+    er_window = int(
+        trial.suggest_float("er_window", regime.er_window.start, regime.er_window.end, step=regime.er_window.step)
+    )
+    chop_enter = trial.suggest_float(
+        "chop_enter_pct", regime.chop_enter_pct.start, regime.chop_enter_pct.end, step=regime.chop_enter_pct.step
+    )
+    dead_band = trial.suggest_float(
+        "chop_dead_band", regime.chop_dead_band.start, regime.chop_dead_band.end, step=regime.chop_dead_band.step
+    )
+    trend = trial.suggest_float("trend_pct", regime.trend_pct.start, regime.trend_pct.end, step=regime.trend_pct.step)
+    return er_window, chop_enter, dead_band, trend
 
 
-def _suggest_kact(trial: optuna.Trial, space: SearchSpace, regime_enabled: bool) -> Candidate:
+def _suggest_kact(trial: optuna.Trial, space: SearchSpace) -> Candidate:
     g = space.k_act
-    er_window, chop_enter = _suggest_regime(trial, regime_enabled)
+    er_window, chop_enter, dead_band, trend = _suggest_regime(trial, space.regime)
     return Candidate(
         k_act=trial.suggest_float("k_act", g.start, g.end, step=g.step),
         min_margin=None,
         stop_pcts=_suggest_stops(trial, space.stop_pcts),
         er_window=er_window,
         chop_enter_pct=chop_enter,
+        chop_dead_band=dead_band,
+        trend_pct=trend,
     )
 
 
-def _suggest_minmargin(trial: optuna.Trial, space: SearchSpace, regime_enabled: bool) -> Candidate:
+def _suggest_minmargin(trial: optuna.Trial, space: SearchSpace) -> Candidate:
     g = space.min_margin
-    er_window, chop_enter = _suggest_regime(trial, regime_enabled)
+    er_window, chop_enter, dead_band, trend = _suggest_regime(trial, space.regime)
     return Candidate(
         k_act=None,
         min_margin=trial.suggest_float("min_margin", g.start, g.end, step=g.step),
         stop_pcts=_suggest_stops(trial, space.stop_pcts),
         er_window=er_window,
         chop_enter_pct=chop_enter,
+        chop_dead_band=dead_band,
+        trend_pct=trend,
     )
 
 
 def _candidate_from_params(params: dict) -> Candidate:
     stop_pcts = {lvl: params[f"stop_pct_{lvl}"] for lvl in LEVELS}
-    er_window = params.get("er_window")
+    raw_er = params.get("er_window")
+    er_window = int(raw_er) if raw_er is not None else None
     chop_enter = params.get("chop_enter_pct")
+    chop_dead_band = params.get("chop_dead_band")
+    trend_pct = params.get("trend_pct")
     if "k_act" in params:
         return Candidate(
-            k_act=params["k_act"], min_margin=None, stop_pcts=stop_pcts, er_window=er_window, chop_enter_pct=chop_enter
+            k_act=params["k_act"],
+            min_margin=None,
+            stop_pcts=stop_pcts,
+            er_window=er_window,
+            chop_enter_pct=chop_enter,
+            chop_dead_band=chop_dead_band,
+            trend_pct=trend_pct,
         )
     return Candidate(
         k_act=None,
@@ -317,6 +376,8 @@ def _candidate_from_params(params: dict) -> Candidate:
         stop_pcts=stop_pcts,
         er_window=er_window,
         chop_enter_pct=chop_enter,
+        chop_dead_band=chop_dead_band,
+        trend_pct=trend_pct,
     )
 
 
@@ -341,12 +402,13 @@ class OptimizerRequest:
     # Search grids (required for OPTIMIZE/AUTO, ignored by CURRENT). Accepts a
     # SearchSpace or the plain dict produced by model_dump()/asdict round-trips.
     search_space: SearchSpace | None = None
-    # Regime filter (Phase 11). When enabled, OPTIMIZE/AUTO search the ER window
-    # + CHOP-enter percentile; CURRENT evaluates the live config with the fixed
-    # er_window / chop_enter_pct below.
+    # Regime filter (Phase 11). For OPTIMIZE/AUTO set search_space.regime; for
+    # CURRENT set regime_enabled=True and the four fixed params below.
     regime_enabled: bool = False
     er_window: int = 32
     chop_enter_pct: float = 0.33
+    chop_dead_band: float = 0.07
+    trend_pct: float = 0.66
 
     def __post_init__(self) -> None:
         if isinstance(self.search_space, dict):
@@ -399,7 +461,6 @@ class EvalContext:
     min_ops: int
     min_test_ops: int
     search_space: SearchSpace | None = None
-    regime_enabled: bool = False
 
 
 def _evaluate(cand: Candidate, ctx: EvalContext) -> _Eval:
@@ -435,7 +496,7 @@ def _build_objective(study_type: str, ctx: EvalContext):
     suggest_fn = _suggest_kact if study_type == "kact" else _suggest_minmargin
 
     def objective(trial: optuna.Trial) -> float:
-        cand = suggest_fn(trial, ctx.search_space, ctx.regime_enabled)
+        cand = suggest_fn(trial, ctx.search_space)
         ev = _evaluate(cand, ctx)
         if ctx.test_df.empty:
             if ev.train_samples < ctx.min_ops:
@@ -642,7 +703,6 @@ def _build_eval_context(req: OptimizerRequest, calibration: dict | None) -> Eval
         min_ops=req.min_ops,
         min_test_ops=req.min_test_ops,
         search_space=req.search_space,
-        regime_enabled=req.regime_enabled,
     )
 
 
@@ -691,6 +751,8 @@ def _candidate_signature(cand: dict) -> tuple:
         tuple(sorted((cand.get("stop_pcts") or {}).items())),
         cand.get("er_window"),
         cand.get("chop_enter_pct"),
+        cand.get("chop_dead_band"),
+        cand.get("trend_pct"),
     )
 
 

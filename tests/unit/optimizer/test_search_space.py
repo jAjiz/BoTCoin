@@ -8,8 +8,9 @@ from pydantic import ValidationError
 
 from api.schemas import GridSpec as ApiGridSpec
 from api.schemas import OptimizerRequest as ApiOptimizerRequest
+from api.schemas import RegimeSpace as ApiRegimeSpace
 from api.schemas import SearchSpace as ApiSearchSpace
-from trading.optimizer.search import AutoSettings, GridSpec, OptimizerRequest, SearchSpace
+from trading.optimizer.search import AutoSettings, GridSpec, OptimizerRequest, RegimeSpace, SearchSpace
 
 
 def _api_space() -> dict:
@@ -107,6 +108,69 @@ def test_dataclass_search_space_asdict_round_trips() -> None:
     req2 = OptimizerRequest(pair="XBTEUR", mode="OPTIMIZE", search_space=rt)
     assert req2.search_space.k_act is None
     assert req2.search_space.min_margin.step == 0.002
+
+
+def _api_regime() -> dict:
+    return {
+        "er_window": {"start": 16, "end": 64, "step": 16},
+        "chop_enter_pct": {"start": 0.25, "end": 0.50, "step": 0.25},
+        "chop_dead_band": {"start": 0.05, "end": 0.10, "step": 0.05},
+        "trend_pct": {"start": 0.60, "end": 0.70, "step": 0.10},
+    }
+
+
+# --- RegimeSpace validation ------------------------------------------------
+
+
+def test_regimespace_rejects_er_window_below_2() -> None:
+    with pytest.raises(ValidationError, match="er_window"):
+        ApiRegimeSpace(
+            er_window=ApiGridSpec(start=1, end=32, step=1),
+            chop_enter_pct=ApiGridSpec(start=0.25, end=0.50, step=0.25),
+            chop_dead_band=ApiGridSpec(start=0.05, end=0.10, step=0.05),
+            trend_pct=ApiGridSpec(start=0.60, end=0.70, step=0.10),
+        )
+
+
+def test_regimespace_rejects_chop_out_of_bounds() -> None:
+    with pytest.raises(ValidationError, match="within"):
+        ApiRegimeSpace(
+            er_window=ApiGridSpec(start=16, end=64, step=16),
+            chop_enter_pct=ApiGridSpec(start=0.25, end=1.50, step=0.25),
+            chop_dead_band=ApiGridSpec(start=0.05, end=0.10, step=0.05),
+            trend_pct=ApiGridSpec(start=0.60, end=0.70, step=0.10),
+        )
+
+
+def test_regimespace_accepts_valid_grids() -> None:
+    r = ApiRegimeSpace(**{k: ApiGridSpec(**v) for k, v in _api_regime().items()})
+    assert r.er_window.start == 16
+    assert r.chop_dead_band.end == 0.10
+
+
+# --- SearchSpace with regime round-trip ------------------------------------
+
+
+def test_dataclass_search_space_with_regime_round_trips() -> None:
+    """RegimeSpace survives asdict → dict → dataclass re-hydration (worker path)."""
+    d = {**_api_space(), "regime": _api_regime()}
+    req = OptimizerRequest(pair="XBTEUR", mode="OPTIMIZE", search_space=d)
+
+    assert isinstance(req.search_space.regime, RegimeSpace)
+    assert req.search_space.regime.er_window.step == 16
+
+    from dataclasses import asdict
+
+    rt = asdict(req)["search_space"]
+    assert rt["regime"]["chop_dead_band"]["end"] == 0.10
+
+    req2 = OptimizerRequest(pair="XBTEUR", mode="OPTIMIZE", search_space=rt)
+    assert req2.search_space.regime.trend_pct.start == 0.60
+
+
+def test_dataclass_search_space_without_regime_is_none() -> None:
+    req = OptimizerRequest(pair="XBTEUR", mode="OPTIMIZE", search_space=_api_space())
+    assert req.search_space.regime is None
 
 
 def test_dataclass_coerces_dict_auto_settings() -> None:

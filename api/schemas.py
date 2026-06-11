@@ -101,15 +101,41 @@ class GridSpec(BaseModel):
         return self
 
 
+class RegimeSpace(BaseModel):
+    """Search grids for the four regime-filter dimensions. All grids use
+    ``suggest_float`` (same as the other dimensions) so TPE retains ordinal
+    structure. ``er_window`` values are integers by convention (step >= 1)."""
+
+    er_window: GridSpec
+    chop_enter_pct: GridSpec
+    chop_dead_band: GridSpec
+    trend_pct: GridSpec
+
+    @model_validator(mode="after")
+    def _validate(self) -> RegimeSpace:
+        if self.er_window.start < 2:
+            raise ValueError("er_window start must be >= 2")
+        for name, g in (
+            ("chop_enter_pct", self.chop_enter_pct),
+            ("chop_dead_band", self.chop_dead_band),
+            ("trend_pct", self.trend_pct),
+        ):
+            if g.start < 0.0 or g.end > 1.0:
+                raise ValueError(f"{name} grid must lie within [0, 1]")
+        return self
+
+
 class SearchSpace(BaseModel):
     """Search grids for an OPTIMIZE/AUTO run. All three grids must be informed
     (no defaults). A ``null`` activation grid disables that whole branch — ``k_act``
     null runs only the min_margin branch and vice versa; at least one must be set.
-    To *fix* (rather than disable) a dimension, pass ``start == end``."""
+    To *fix* (rather than disable) a dimension, pass ``start == end``.
+    ``regime`` is optional; when provided, the four regime dimensions are searched."""
 
     stop_pcts: GridSpec
     k_act: GridSpec | None
     min_margin: GridSpec | None
+    regime: RegimeSpace | None = None
 
     @model_validator(mode="after")
     def _validate(self) -> SearchSpace:
@@ -153,12 +179,13 @@ class OptimizerRequest(BaseModel):
     # this same model can echo a stored request back without re-failing historical
     # jobs that predate the search_space field.
     search_space: SearchSpace | None = None
-    # Regime filter (Phase 11). regime_enabled=True adds the ER search dimensions
-    # (OPTIMIZE/AUTO) or evaluates the live config with the fixed regime params
-    # below (CURRENT).
+    # Regime filter (Phase 11). For OPTIMIZE/AUTO set search_space.regime; for
+    # CURRENT set regime_enabled=True and the four fixed params below.
     regime_enabled: bool = False
     er_window: int = Field(default=32, ge=2, le=500)
     chop_enter_pct: float = Field(default=0.33, ge=0.0, le=1.0)
+    chop_dead_band: float = Field(default=0.07, ge=0.0, le=1.0)
+    trend_pct: float = Field(default=0.66, ge=0.0, le=1.0)
 
 
 class OptimizerJobAcceptedResponse(BaseModel):
@@ -177,6 +204,10 @@ class CandidateResult(BaseModel):
     k_act: float | None = None
     min_margin: float | None = None
     stop_pcts: dict[str, float] = Field(default_factory=dict)
+    er_window: int | None = None
+    chop_enter_pct: float | None = None
+    chop_dead_band: float | None = None
+    trend_pct: float | None = None
     in_sample_pnl_pct: float | None = None
     train_pnl_pct: float | None = None
     test_pnl_pct: float | None = None
