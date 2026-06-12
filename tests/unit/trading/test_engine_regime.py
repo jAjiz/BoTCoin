@@ -144,3 +144,22 @@ def test_regime_arr_alignment_with_skipped_atr_rows() -> None:
 
 def test_regime_constants_exported() -> None:
     assert REGIME_CHOP == "CHOP"
+
+
+def test_count_chop_transitions_counts_chop_boundary_only() -> None:
+    """Only CHOP<->non-CHOP crossings count; TREND<->MIXED flips are ignored."""
+    labels = ["MIXED", "CHOP", "CHOP", "TREND", "MIXED", "TREND", "CHOP", "MIXED"]
+    # crossings: MIXED->CHOP, CHOP->TREND, TREND->CHOP, CHOP->MIXED
+    assert engine.count_chop_transitions(labels) == 4
+    assert engine.count_chop_transitions(["TREND", "MIXED", "TREND"]) == 0
+    assert engine.count_chop_transitions([]) == 0
+
+
+def test_regime_labels_matches_simulate_path() -> None:
+    """regime_labels is the same classification simulate_operations precomputes:
+    one label per bar, hysteresis applied in series order."""
+    close = _trending_close(40)
+    policy = engine.RegimePolicy(enabled=True, er_window=4)
+    labels = engine.regime_labels(np.array(close, dtype=float), policy)
+    assert len(labels) == len(close)
+    assert all(label in ("TREND", "MIXED", "CHOP") for label in labels)

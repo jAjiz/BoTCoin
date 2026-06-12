@@ -78,6 +78,7 @@ def test_regime_disabled_matches_baseline(monkeypatch) -> None:
         assert cand["chop_enter_pct"] is None
         assert cand["chop_dead_band"] is None
         assert cand["trend_pct"] is None
+        assert cand["chop_transitions"] is None
     # ...and no ER lines leak into the suggested env.
     assert not any("ER_WINDOW" in line for line in result.suggested_env_lines)
 
@@ -97,6 +98,7 @@ def test_regime_enabled_expands_search(monkeypatch) -> None:
     assert best["trend_pct"] in (0.60, 0.70)
     assert isinstance(best["train_ops"], int)
     assert isinstance(best["test_ops"], int)
+    assert isinstance(best["chop_transitions"], int)
 
 
 def test_regime_enabled_no_global_mutation(monkeypatch) -> None:
@@ -173,6 +175,7 @@ def test_current_mode_with_regime(monkeypatch) -> None:
     best = result.top_candidates[0]
     assert isinstance(best["train_ops"], int)
     assert isinstance(best["test_ops"], int)
+    assert isinstance(best["chop_transitions"], int)
     assert best["er_window"] == 24
     assert best["chop_enter_pct"] == 0.30
     assert best["chop_dead_band"] == 0.10

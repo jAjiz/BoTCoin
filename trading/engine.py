@@ -7,6 +7,7 @@ request, or an optimizer candidate without ever touching module-level globals.
 """
 
 from dataclasses import dataclass
+from itertools import pairwise
 
 import numpy as np
 
@@ -216,6 +217,28 @@ def classify_regime(
     return REGIME_MIXED
 
 
+def regime_labels(close: np.ndarray, policy: RegimePolicy) -> list[str]:
+    """Per-bar regime labels for a close series under ``policy``, with the
+    percentile thresholds resolved against this series' own ER distribution
+    (the same recompute path ``simulate_operations`` uses)."""
+    er = efficiency_ratio(np.asarray(close, dtype=float), policy.er_window)
+    enter, exit_, trend = resolve_er_thresholds(er, policy.chop_enter_pct, policy.chop_exit_pct, policy.trend_pct)
+    labels: list[str] = []
+    prev: str | None = None
+    for v in er:
+        prev = classify_regime(v, enter, exit_, trend, prev)
+        labels.append(prev)
+    return labels
+
+
+def count_chop_transitions(labels: list[str]) -> int:
+    """Number of CHOP<->non-CHOP boundary crossings in a label series.
+    TREND<->MIXED flips are ignored — only the CHOP boundary gates trading. This
+    is the Gate-2 data-sufficiency signal: a config whose edge comes from a
+    single long episode is untested, however good its PnL."""
+    return sum(1 for prev, curr in pairwise(labels) if (prev == REGIME_CHOP) != (curr == REGIME_CHOP))
+
+
 def simulate_operations(
     df,
     cfg: EngineConfig,
@@ -229,15 +252,7 @@ def simulate_operations(
     # array is aligned to df row position so the main loop can look it up by index.
     regime_arr: list[str] | None = None
     if cfg.regime.enabled and "close" in df.columns:
-        er = efficiency_ratio(df["close"].to_numpy(dtype=float), cfg.regime.er_window)
-        r_enter, r_exit, r_trend = resolve_er_thresholds(
-            er, cfg.regime.chop_enter_pct, cfg.regime.chop_exit_pct, cfg.regime.trend_pct
-        )
-        regime_arr = []
-        prev_regime: str | None = None
-        for v in er:
-            prev_regime = classify_regime(v, r_enter, r_exit, r_trend, prev_regime)
-            regime_arr.append(prev_regime)
+        regime_arr = regime_labels(df["close"].to_numpy(dtype=float), cfg.regime)
 
     ops: list[Operation] = []
     # Track cumulative return in percent (compounded). Start at 0%.

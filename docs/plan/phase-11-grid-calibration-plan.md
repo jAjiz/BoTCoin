@@ -359,7 +359,7 @@ top, so sufficiency tracking and job verdicts live in one place.
 |---|---|---|
 | Block 0 (baselines) | **Yes** (trivial, 4 CURRENT jobs) | Re-anchors every comparison to the longer window |
 | Stage A (ranges) | **Only if** a dim hit the edge rule, or new market regimes appear in the data | Ranges are mostly parameter geometry, not statistics — they should hold |
-| Stage B (dead/live) | **Yes** (cheap) | A dim that looks dead on 30–60 ops may show a real gradient at 100+ ops; the classification is the most data-sensitive *cheap* result |
+| Stage B (dead/live) | **Yes** (cheap) — and this time pin the companions via `current_params` | A dim that looks dead on 30–60 ops may show a real gradient at 100+ ops. Also: the first pass ran before the `.env` overrides existed, so its gradients were measured around the *live* config, not the Stage-A winner companions (e.g. job 67 baseline +6.46% vs job 64's +13.17% with identical regime params) — the re-run fixes that too |
 | Stage C (step) | **Yes** | Step verdicts are pure data-volume calls; "ties break coarse" stops applying as the test window grows |
 | Stage D (stability) | **Yes — upgraded** | With ≥60 days use **3** windows (or proper walk-forward, the deferred option (1) from the robustness discussion) instead of 2 overlapping ones |
 | Stage E (AUTO) | **Yes** | The re-run that passes the gates below is the one whose config ships to prod |
@@ -390,10 +390,11 @@ Check it empirically: run a CURRENT job and read the test op count — no
 estimation needed.
 
 **Gate 2 — regime-episode count (Block 4 only).** The window must contain
-**≥ ~6 chop↔trend transitions** under the candidate classifier. If the whole
+**≥ ~6 CHOP↔non-CHOP transitions** under the candidate classifier. If the whole
 window is one trend, the chop filter was never exercised and no op count can
-validate it. Count episodes from the winning candidate's simulation; a window
-that fails this gate cannot validate regime dims regardless of Gate 1.
+validate it. Read it from the `chop_transitions` field of the candidate (exposed
+per candidate in the optimizer result, like `test_ops`); a window that fails this
+gate cannot validate regime dims regardless of Gate 1.
 
 **Gate 3 — verdict stability under growing data (the actual empirical test).**
 Pin one CURRENT job (prod config) and one OPTIMIZE job (fixed grid, fixed seed)
@@ -413,9 +414,9 @@ of `phase-11-grid-calibration-results.md`:
 | date | pair | days | test_ops (G1 ≥20) | episodes (G2 ≥6) | robust_pnl sign | winner zone | G3 stable? | gates passed |
 ```
 
-- `test_ops` comes straight from the CURRENT result; `episodes` from the winning
-  candidate's simulation; `winner zone` is the OPTIMIZE winner's params (rounded
-  to grid points) — "same zone as last week?" is the G3 check.
+- `test_ops` and `episodes` (= `chop_transitions`) come straight from the CURRENT
+  result; `winner zone` is the OPTIMIZE winner's params (rounded to grid points) —
+  "same zone as last week?" is the G3 check.
 - `G3 stable?` flips to **yes** after ~3 consecutive rows with the same
   `robust_pnl` sign and winner zone.
 - The table is the single place to answer "are we there yet?": the first week

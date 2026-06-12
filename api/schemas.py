@@ -240,6 +240,9 @@ class CandidateResult(BaseModel):
     robust_pnl_pct: float | None = None
     train_ops: int | None = None
     test_ops: int | None = None
+    # CHOP<->non-CHOP crossings of the candidate's classifier over the window —
+    # the Gate-2 signal. None when the regime gate is off.
+    chop_transitions: int | None = None
 
 
 class AutoResult(BaseModel):

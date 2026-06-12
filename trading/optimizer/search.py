@@ -39,7 +39,15 @@ from optuna.samplers import TPESampler
 import core.database as db
 from core.config import ATR_DESV_LIMIT, CANDLE_TIMEFRAME, STOP_PERCENTILES, TRADING_PARAMS
 from core.config import VOLATILITY_LEVELS as LEVELS
-from trading.engine import EngineConfig, PairCalibration, RegimePolicy, SidePolicy, simulate_operations
+from trading.engine import (
+    EngineConfig,
+    PairCalibration,
+    RegimePolicy,
+    SidePolicy,
+    count_chop_transitions,
+    regime_labels,
+    simulate_operations,
+)
 from trading.market_analyzer import analyze_structural_noise
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
@@ -316,18 +324,38 @@ def _build_engine_config(
         k_stop_sell=sell_k_stop,
     )
     side = SidePolicy(k_act=cand.k_act, min_margin=cand.min_margin or 0.0)
-    regime = RegimePolicy()  # disabled by default
-    if cand.er_window is not None and cand.chop_enter_pct is not None:
-        regime = RegimePolicy(
-            enabled=True,
-            er_window=int(cand.er_window),
-            chop_enter_pct=float(cand.chop_enter_pct),
-            chop_exit_pct=min(float(cand.chop_enter_pct) + float(cand.chop_dead_band or 0.0), 1.0),
-            trend_pct=float(cand.trend_pct or 0.66),
-        )
     return EngineConfig(
-        pair=pair, calibration=calibration, buy=side, sell=side, atr_desv_limit=atr_desv_limit, regime=regime
+        pair=pair,
+        calibration=calibration,
+        buy=side,
+        sell=side,
+        atr_desv_limit=atr_desv_limit,
+        regime=_regime_policy(cand),
     )
+
+
+def _regime_policy(cand: Candidate) -> RegimePolicy:
+    """Candidate regime fields -> RegimePolicy (disabled when they are unset).
+    chop_exit is derived as enter + dead_band, capped at 1.0."""
+    if cand.er_window is None or cand.chop_enter_pct is None:
+        return RegimePolicy()
+    return RegimePolicy(
+        enabled=True,
+        er_window=int(cand.er_window),
+        chop_enter_pct=float(cand.chop_enter_pct),
+        chop_exit_pct=min(float(cand.chop_enter_pct) + float(cand.chop_dead_band or 0.0), 1.0),
+        trend_pct=float(cand.trend_pct or 0.66),
+    )
+
+
+def _chop_transitions(cand: Candidate, ctx: "EvalContext") -> int | None:
+    """CHOP<->non-CHOP crossings of the candidate's classifier over the working
+    dataframe (Gate 2). None when the gate is off. Computed only for surfaced
+    candidates (top-5 / CURRENT), not per trial."""
+    policy = _regime_policy(cand)
+    if not policy.enabled:
+        return None
+    return count_chop_transitions(regime_labels(ctx.df["close"].to_numpy(dtype=float), policy))
 
 
 # --- Optuna search ---------------------------------------------------------
@@ -641,7 +669,9 @@ def _advance_seed_to(
     return completed, n_total
 
 
-def _result_from_completed(req: OptimizerRequest, all_completed: list[tuple], n_total: int) -> OptimizerResult:
+def _result_from_completed(
+    req: OptimizerRequest, all_completed: list[tuple], n_total: int, ctx: EvalContext
+) -> OptimizerResult:
     """Rank, deduplicate and format the completed trials into an OptimizerResult.
     Shared by single OPTIMIZE runs and each AUTO seed."""
     # Rank by robust_pnl (the objective value); break ties by in-sample, then
@@ -678,6 +708,7 @@ def _result_from_completed(req: OptimizerRequest, all_completed: list[tuple], n_
             "robust_pnl_pct": _round2(value),
             "train_ops": user_attrs.get("train_ops"),
             "test_ops": user_attrs.get("test_ops"),
+            "chop_transitions": _chop_transitions(cand, ctx),
         }
 
     best_cand = _candidate_from_params(top[0][0])
@@ -750,7 +781,9 @@ def _current_result(req: OptimizerRequest, ctx: EvalContext) -> OptimizerResult:
     return OptimizerResult(
         pair=req.pair,
         mode=req.mode,
-        top_candidates=[{**_candidate_to_dict(cand), **_scores_dict(ev)}],
+        top_candidates=[
+            {**_candidate_to_dict(cand), **_scores_dict(ev), "chop_transitions": _chop_transitions(cand, ctx)}
+        ],
         suggested_env_lines=_format_env_lines(req.pair, cand),
         n_trials_run=1,
     )
@@ -822,7 +855,7 @@ def _seed_result(
     completed, n_total = _advance_seed_to(state, target_n_trials, ctx, executor)
     if not completed:
         raise ValueError("No candidate met the min_ops / min_test_ops constraints")
-    return _result_from_completed(req, completed, n_total)
+    return _result_from_completed(req, completed, n_total, ctx)
 
 
 def run_auto_optimize(req: OptimizerRequest, calibration: dict | None) -> OptimizerResult:
