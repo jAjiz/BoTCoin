@@ -13,7 +13,15 @@ import pandas as pd
 
 import core.config as config
 import trading.optimizer.search as optimizer
-from trading.optimizer.search import GridSpec, OptimizerRequest, RegimeSpace, SearchSpace, run_optimize
+from trading.optimizer.search import (
+    CurrentParams,
+    GridSpec,
+    OptimizerRequest,
+    RegimeParams,
+    RegimeSpace,
+    SearchSpace,
+    run_optimize,
+)
 
 _PAIR = "XBTEUR"
 _LEVELS = ("LL", "LV", "MV", "HV", "HH")
@@ -152,11 +160,9 @@ def test_current_mode_with_regime(monkeypatch) -> None:
         OptimizerRequest(
             pair=_PAIR,
             mode="CURRENT",
-            regime_enabled=True,
-            er_window=24,
-            chop_enter_pct=0.30,
-            chop_dead_band=0.10,
-            trend_pct=0.70,
+            current_params=CurrentParams(
+                regime=RegimeParams(er_window=24, chop_enter_pct=0.30, chop_dead_band=0.10, trend_pct=0.70)
+            ),
         ),
         calibration=None,
     )

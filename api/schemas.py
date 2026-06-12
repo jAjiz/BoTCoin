@@ -160,6 +160,40 @@ class AutoSettings(BaseModel):
     max_trials: int = Field(default=9_000, ge=500, le=20_000)
 
 
+class RegimeParams(BaseModel):
+    """Fixed-point regime config for CURRENT mode — values, not grids (the search
+    counterpart is RegimeSpace). Presence of the object enables the gate."""
+
+    er_window: int = Field(default=32, ge=2, le=500)
+    chop_enter_pct: float = Field(default=0.33, ge=0.0, le=1.0)
+    chop_dead_band: float = Field(default=0.07, ge=0.0, le=1.0)
+    trend_pct: float = Field(default=0.66, ge=0.0, le=1.0)
+
+
+class CurrentParams(BaseModel):
+    """CURRENT-mode evaluation knobs, grouped (ignored by OPTIMIZE/AUTO). Each
+    field set replaces the value read from the live .env, allowing sensitivity
+    runs against any config without touching the running bot. ``regime`` is the
+    fixed-point gate config; ``None`` evaluates with the gate disabled (the live
+    .env has no regime vars yet, so the request is the only source for it)."""
+
+    stop_pcts: dict[str, float] | None = None
+    k_act: float | None = Field(default=None, ge=0.0)
+    min_margin: float | None = Field(default=None, ge=0.0)
+    regime: RegimeParams | None = None
+
+    @model_validator(mode="after")
+    def _validate(self) -> CurrentParams:
+        if self.stop_pcts is not None:
+            required = {"LL", "LV", "MV", "HV", "HH"}
+            if set(self.stop_pcts.keys()) != required:
+                raise ValueError(f"stop_pcts must contain exactly the keys {sorted(required)}")
+            for lvl, v in self.stop_pcts.items():
+                if not (0.0 <= v <= 1.0):
+                    raise ValueError(f"stop_pcts[{lvl}]={v} must be in [0, 1]")
+        return self
+
+
 class OptimizerRequest(BaseModel):
     pair: str
     mode: Literal["OPTIMIZE", "CURRENT", "AUTO"]
@@ -179,13 +213,10 @@ class OptimizerRequest(BaseModel):
     # this same model can echo a stored request back without re-failing historical
     # jobs that predate the search_space field.
     search_space: SearchSpace | None = None
-    # Regime filter (Phase 11). For OPTIMIZE/AUTO set search_space.regime; for
-    # CURRENT set regime_enabled=True and the four fixed params below.
-    regime_enabled: bool = False
-    er_window: int = Field(default=32, ge=2, le=500)
-    chop_enter_pct: float = Field(default=0.33, ge=0.0, le=1.0)
-    chop_dead_band: float = Field(default=0.07, ge=0.0, le=1.0)
-    trend_pct: float = Field(default=0.66, ge=0.0, le=1.0)
+    # CURRENT-mode evaluation knobs (.env overrides + fixed regime config),
+    # grouped like auto_settings/search_space. Ignored by OPTIMIZE/AUTO, which
+    # take the regime dimensions from search_space.regime instead.
+    current_params: CurrentParams | None = None
 
 
 class OptimizerJobAcceptedResponse(BaseModel):

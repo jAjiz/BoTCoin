@@ -194,8 +194,8 @@ Reference points for every later comparison. Per pair:
 
 // 0b: regime with current default values
 { "pair": "XBTEUR", "mode": "CURRENT", "fee_pct": 0.26,
-  "regime_enabled": true, "er_window": 32, "chop_enter_pct": 0.33,
-  "chop_dead_band": 0.07, "trend_pct": 0.66 }
+  "current_params": { "regime": { "er_window": 32, "chop_enter_pct": 0.33,
+                                  "chop_dead_band": 0.07, "trend_pct": 0.66 } } }
 ```
 
 **Read:** does `robust_pnl(0b) > robust_pnl(0a)`? If not, the regime defaults are
@@ -464,17 +464,19 @@ XBTEUR_ER_TREND_PCT=0.66
 
 **Request formats per mode (verified working on jobs 35/36/37):**
 
-CURRENT — evaluate live config with fixed regime params:
+CURRENT — evaluate live config with fixed regime params (and optional `.env`
+overrides for Stage-B sensitivity runs), grouped under `current_params`; omitting
+`current_params.regime` evaluates with the gate disabled:
 
 ```json
 { "pair": "XBTEUR", "mode": "CURRENT", "fee_pct": 0.26,
-  "regime_enabled": true,
-  "er_window": 32, "chop_enter_pct": 0.33,
-  "chop_dead_band": 0.07, "trend_pct": 0.66 }
+  "current_params": {
+    "regime": { "er_window": 32, "chop_enter_pct": 0.33,
+                "chop_dead_band": 0.07, "trend_pct": 0.66 } } }
 ```
 
-OPTIMIZE — search regime dims via `search_space.regime` (`regime_enabled` is
-**ignored** for OPTIMIZE/AUTO; regime is enabled iff `search_space.regime` is set):
+OPTIMIZE — search regime dims via `search_space.regime` (`current_params` is
+ignored for OPTIMIZE/AUTO; regime is enabled iff `search_space.regime` is set):
 
 ```json
 { "pair": "XBTEUR", "mode": "OPTIMIZE", "fee_pct": 0.26, "n_trials": 800,

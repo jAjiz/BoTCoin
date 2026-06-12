@@ -47,14 +47,16 @@ optuna.logging.set_verbosity(optuna.logging.WARNING)
 MODES = ("OPTIMIZE", "CURRENT", "AUTO")
 
 
-# --- search space ----------------------------------------------------------
+# --- request containers ------------------------------------------------------
+# Plain picklable mirrors of the Pydantic models in api.schemas. Validation
+# happens once at the API boundary; these only carry values across the
+# dataclass -> JSONB -> spawned-worker round trips (the _from_dict helpers
+# re-hydrate them after model_dump()/asdict).
 
 
 @dataclass(frozen=True)
 class GridSpec:
-    """A uniform numeric grid (start, end, step). Mirrors the Pydantic GridSpec
-    in api.schemas; validation lives at the API boundary, this is a plain
-    container shipped to worker processes and consumed by ``suggest_float``."""
+    """A uniform numeric grid, consumed by ``suggest_float``."""
 
     start: float
     end: float
@@ -63,9 +65,8 @@ class GridSpec:
 
 @dataclass(frozen=True)
 class RegimeSpace:
-    """Search grids for the four regime-filter dimensions (mirrors the Pydantic
-    RegimeSpace in api.schemas). All use ``suggest_float``; ``er_window`` values
-    are integers by convention (step >= 1)."""
+    """Search grids for the four regime-filter dimensions. All use
+    ``suggest_float``; ``er_window`` values are integers by convention (step >= 1)."""
 
     er_window: GridSpec
     chop_enter_pct: GridSpec
@@ -87,12 +88,34 @@ class SearchSpace:
 
 @dataclass(frozen=True)
 class AutoSettings:
-    """AUTO-mode convergence knobs (mirrors the Pydantic AutoSettings)."""
+    """AUTO-mode convergence knobs."""
 
     n_seeds: int = 4
     min_agree: int = 3
     trial_step: int = 500
     max_trials: int = 9_000
+
+
+@dataclass(frozen=True)
+class RegimeParams:
+    """Fixed-point regime config for CURRENT mode — values, not grids
+    (cf. RegimeSpace)."""
+
+    er_window: int = 32
+    chop_enter_pct: float = 0.33
+    chop_dead_band: float = 0.07
+    trend_pct: float = 0.66
+
+
+@dataclass(frozen=True)
+class CurrentParams:
+    """CURRENT-mode evaluation knobs. Each field set replaces the value read
+    from the live .env; ``regime`` None evaluates with the gate disabled."""
+
+    stop_pcts: dict[str, float] | None = None
+    k_act: float | None = None
+    min_margin: float | None = None
+    regime: RegimeParams | None = None
 
 
 def _grid_from_dict(d: dict | None) -> GridSpec | None:
@@ -111,13 +134,21 @@ def _regime_space_from_dict(d: dict | None) -> RegimeSpace | None:
 
 
 def _search_space_from_dict(d: dict) -> SearchSpace:
-    """Coerce a plain dict (from ``model_dump``/``asdict`` round-trips) into a
-    SearchSpace. Lets the request cross the API → dataclass → worker boundaries."""
     return SearchSpace(
         stop_pcts=GridSpec(**d["stop_pcts"]),
         k_act=_grid_from_dict(d.get("k_act")),
         min_margin=_grid_from_dict(d.get("min_margin")),
         regime=_regime_space_from_dict(d.get("regime")),
+    )
+
+
+def _current_params_from_dict(d: dict) -> CurrentParams:
+    regime = d.get("regime")
+    return CurrentParams(
+        stop_pcts=d.get("stop_pcts"),
+        k_act=d.get("k_act"),
+        min_margin=d.get("min_margin"),
+        regime=RegimeParams(**regime) if isinstance(regime, dict) else regime,
     )
 
 
@@ -157,7 +188,7 @@ class Candidate:
     k_act: float | None
     min_margin: float | None
     stop_pcts: dict[str, float]
-    # Regime gate (Phase 11). All None => gate disabled for this candidate.
+    # Regime gate: all four None => gate disabled for this candidate.
     er_window: int | None = None
     chop_enter_pct: float | None = None
     chop_dead_band: float | None = None
@@ -217,34 +248,40 @@ def _format_env_lines(pair: str, cand: Candidate) -> list[str]:
 
 def _candidate_from_env(req: "OptimizerRequest") -> Candidate:
     pair = req.pair
-    raw_k_act = TRADING_PARAMS[pair]["buy"].get("K_ACT")
-    try:
-        k_act = float(raw_k_act) if raw_k_act is not None and str(raw_k_act).strip() != "" else None
-    except (TypeError, ValueError):
-        k_act = None
-    raw_mm = TRADING_PARAMS[pair]["buy"].get("MIN_MARGIN", 0) or 0
-    try:
-        min_margin = float(raw_mm)
-    except (TypeError, ValueError):
-        min_margin = 0.0
-    stop_pcts = {lvl: float(STOP_PERCENTILES[pair][lvl]) for lvl in LEVELS}
-    er_window = req.er_window if req.regime_enabled else None
-    chop_enter = req.chop_enter_pct if req.regime_enabled else None
-    chop_dead_band = req.chop_dead_band if req.regime_enabled else None
-    trend_pct = req.trend_pct if req.regime_enabled else None
+    cur = req.current_params or CurrentParams()
+    if cur.k_act is not None:
+        k_act = cur.k_act
+    else:
+        raw_k_act = TRADING_PARAMS[pair]["buy"].get("K_ACT")
+        try:
+            k_act = float(raw_k_act) if raw_k_act is not None and str(raw_k_act).strip() != "" else None
+        except (TypeError, ValueError):
+            k_act = None
+    if cur.min_margin is not None:
+        min_margin = cur.min_margin
+    else:
+        raw_mm = TRADING_PARAMS[pair]["buy"].get("MIN_MARGIN", 0) or 0
+        try:
+            min_margin = float(raw_mm)
+        except (TypeError, ValueError):
+            min_margin = 0.0
+    if cur.stop_pcts is not None:
+        stop_pcts = {lvl: float(cur.stop_pcts[lvl]) for lvl in LEVELS}
+    else:
+        stop_pcts = {lvl: float(STOP_PERCENTILES[pair][lvl]) for lvl in LEVELS}
+    regime = cur.regime
     return Candidate(
         k_act=k_act,
         min_margin=min_margin,
         stop_pcts=stop_pcts,
-        er_window=er_window,
-        chop_enter_pct=chop_enter,
-        chop_dead_band=chop_dead_band,
-        trend_pct=trend_pct,
+        er_window=regime.er_window if regime else None,
+        chop_enter_pct=regime.chop_enter_pct if regime else None,
+        chop_dead_band=regime.chop_dead_band if regime else None,
+        trend_pct=regime.trend_pct if regime else None,
     )
 
 
 def _round2(v: float | None) -> float | None:
-    """Round an output value to 2 decimals; pass None through unchanged."""
     return None if v is None else round(float(v), 2)
 
 
@@ -396,25 +433,23 @@ class OptimizerRequest:
     min_test_ops: int = 0
     n_trials: int = 1_000
     seed: int = 42
-    # AUTO-mode knobs, grouped (None => defaults). Accepts an AutoSettings or the
-    # plain dict from model_dump()/asdict round-trips.
+    # The grouped knobs below each accept their dataclass or the plain dict from
+    # model_dump()/asdict round-trips (re-hydrated in __post_init__).
+    # AUTO-mode convergence knobs; None => defaults.
     auto_settings: AutoSettings | None = None
-    # Search grids (required for OPTIMIZE/AUTO, ignored by CURRENT). Accepts a
-    # SearchSpace or the plain dict produced by model_dump()/asdict round-trips.
+    # Search grids — required for OPTIMIZE/AUTO, ignored by CURRENT.
     search_space: SearchSpace | None = None
-    # Regime filter (Phase 11). For OPTIMIZE/AUTO set search_space.regime; for
-    # CURRENT set regime_enabled=True and the four fixed params below.
-    regime_enabled: bool = False
-    er_window: int = 32
-    chop_enter_pct: float = 0.33
-    chop_dead_band: float = 0.07
-    trend_pct: float = 0.66
+    # CURRENT-mode .env overrides + fixed regime config; ignored by OPTIMIZE/AUTO,
+    # which take the regime dimensions from search_space.regime instead.
+    current_params: CurrentParams | None = None
 
     def __post_init__(self) -> None:
         if isinstance(self.search_space, dict):
             object.__setattr__(self, "search_space", _search_space_from_dict(self.search_space))
         if isinstance(self.auto_settings, dict):
             object.__setattr__(self, "auto_settings", AutoSettings(**self.auto_settings))
+        if isinstance(self.current_params, dict):
+            object.__setattr__(self, "current_params", _current_params_from_dict(self.current_params))
 
 
 @dataclass(frozen=True)
@@ -518,14 +553,11 @@ def _collect_completed(study: optuna.Study) -> list[tuple]:
 
 @dataclass
 class _SeedStudies:
-    """A seed's warm-startable studies, one per *active* branch.
-
-    Only branches enabled by the SearchSpace appear in ``studies`` (key
-    ``"kact"`` / ``"minmargin"``). Kept alive across AUTO escalation levels so
-    that *adding* trials continues the TPE search instead of restarting it from
-    scratch; ``done`` tracks the cumulative trial target already requested per
-    branch, so each escalation only runs the delta.
-    """
+    """A seed's warm-startable studies, one per *active* branch (key ``"kact"`` /
+    ``"minmargin"``). Kept alive across AUTO escalation levels so that *adding*
+    trials continues the TPE search instead of restarting it; ``done`` tracks the
+    cumulative trial target already requested per branch, so each escalation only
+    runs the delta."""
 
     seed: int
     studies: dict[str, optuna.Study]
@@ -533,8 +565,7 @@ class _SeedStudies:
 
 
 def _new_seed_studies(seed: int, space: SearchSpace) -> _SeedStudies:
-    # minmargin uses seed+1 so the two branches explore independently. A branch
-    # whose grid is None is omitted entirely (disabled for this search).
+    # minmargin uses seed+1 so the two branches explore independently.
     studies: dict[str, optuna.Study] = {}
     if space.k_act is not None:
         studies["kact"] = _build_study(seed)
@@ -743,8 +774,7 @@ def _candidate_signature(cand: dict) -> tuple:
     """Hashable signature of a candidate's *config* (not its score), used to group
     seeds that found the same solution. Two seeds agree only if their best config
     matches exactly (k_act vs min_margin candidates never collide — disjoint keys).
-    er_window / chop_enter_pct are included for forward-compat with the regime
-    branch (absent → None here)."""
+    The regime fields are part of the signature; None when the gate is off."""
     return (
         cand.get("k_act"),
         cand.get("min_margin"),
@@ -794,9 +824,8 @@ def run_auto_optimize(req: OptimizerRequest, calibration: dict | None) -> Optimi
         raise ValueError("search_space is required for OPTIMIZE/AUTO")
     auto = req.auto_settings or AutoSettings()
     seeds = random.sample(range(1, 9999), auto.n_seeds)
-    # Load OHLC + calibration once, and keep each seed's studies alive across
-    # escalation levels so adding trials *continues* the search (warm-start)
-    # instead of restarting it from scratch at every level.
+    # One context and one set of studies for the whole search: the seeds warm-start
+    # across escalation levels (see _SeedStudies) and share the loaded OHLC.
     ctx = _build_eval_context(req, calibration)
     states = {seed: _new_seed_studies(seed, req.search_space) for seed in seeds}
 
