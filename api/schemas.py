@@ -102,9 +102,8 @@ class GridSpec(BaseModel):
 
 
 class RegimeSpace(BaseModel):
-    """Search grids for the four regime-filter dimensions. All grids use
-    ``suggest_float`` (same as the other dimensions) so TPE retains ordinal
-    structure. ``er_window`` values are integers by convention (step >= 1)."""
+    """Search grids for the four regime-filter dimensions. ``er_window`` values
+    are integers by convention (step >= 1)."""
 
     er_window: GridSpec
     chop_enter_pct: GridSpec
@@ -127,10 +126,10 @@ class RegimeSpace(BaseModel):
 
 class SearchSpace(BaseModel):
     """Search grids for an OPTIMIZE/AUTO run. All three grids must be informed
-    (no defaults). A ``null`` activation grid disables that whole branch — ``k_act``
-    null runs only the min_margin branch and vice versa; at least one must be set.
-    To *fix* (rather than disable) a dimension, pass ``start == end``.
-    ``regime`` is optional; when provided, the four regime dimensions are searched."""
+    (no defaults). A ``null`` activation grid disables that whole branch (at least
+    one must be set); to *fix* (rather than disable) a dimension, pass
+    ``start == end``. ``regime`` is optional; when provided, the four regime
+    dimensions are searched."""
 
     stop_pcts: GridSpec
     k_act: GridSpec | None
@@ -151,8 +150,8 @@ class SearchSpace(BaseModel):
 
 
 class AutoSettings(BaseModel):
-    """AUTO-mode convergence knobs, grouped (only meaningful for mode=AUTO). Unlike
-    SearchSpace these keep sensible defaults, so AUTO works without spelling them out."""
+    """AUTO-mode convergence knobs (ignored for OPTIMIZE/CURRENT). Unlike
+    SearchSpace they keep defaults, so AUTO works without spelling them out."""
 
     n_seeds: int = Field(default=4, ge=2, le=8)
     min_agree: int = Field(default=3, ge=2, le=8)
@@ -171,11 +170,12 @@ class RegimeParams(BaseModel):
 
 
 class CurrentParams(BaseModel):
-    """CURRENT-mode evaluation knobs, grouped (ignored by OPTIMIZE/AUTO). Each
-    field set replaces the value read from the live .env, allowing sensitivity
-    runs against any config without touching the running bot. ``regime`` is the
-    fixed-point gate config; ``None`` evaluates with the gate disabled (the live
-    .env has no regime vars yet, so the request is the only source for it)."""
+    """CURRENT-mode evaluation knobs (ignored by OPTIMIZE/AUTO, which take the
+    regime dimensions from ``search_space.regime``). Each field set replaces the
+    value read from the live .env, allowing sensitivity runs against any config
+    without touching the running bot. ``regime`` ``None`` evaluates with the gate
+    disabled (the live .env has no regime vars yet, so the request is the only
+    source for it)."""
 
     stop_pcts: dict[str, float] | None = None
     k_act: float | None = Field(default=None, ge=0.0)
@@ -205,17 +205,12 @@ class OptimizerRequest(BaseModel):
     min_test_ops: int = 0
     n_trials: int = Field(default=1_000, ge=1, le=10_000)
     seed: int = 42
-    # AUTO-mode knobs (ignored for OPTIMIZE/CURRENT). Omit to use defaults.
+    # Mode applicability of each group is documented on its class. search_space is
+    # required for OPTIMIZE/AUTO, but enforced at the route (not as a model
+    # validator) so this same model can echo a stored request back without
+    # re-failing historical jobs that predate the field.
     auto_settings: AutoSettings | None = None
-    # Search grids for OPTIMIZE/AUTO (the search dimensions); ignored by CURRENT,
-    # which evaluates the live .env config and searches nothing. The "required for
-    # OPTIMIZE/AUTO" rule is enforced at the route (not as a model validator) so
-    # this same model can echo a stored request back without re-failing historical
-    # jobs that predate the search_space field.
     search_space: SearchSpace | None = None
-    # CURRENT-mode evaluation knobs (.env overrides + fixed regime config),
-    # grouped like auto_settings/search_space. Ignored by OPTIMIZE/AUTO, which
-    # take the regime dimensions from search_space.regime instead.
     current_params: CurrentParams | None = None
 
 
@@ -243,11 +238,13 @@ class CandidateResult(BaseModel):
     train_pnl_pct: float | None = None
     test_pnl_pct: float | None = None
     robust_pnl_pct: float | None = None
+    train_ops: int | None = None
+    test_ops: int | None = None
 
 
 class AutoResult(BaseModel):
-    """AUTO-only consensus outcome, grouped (present only for AUTO results).
-    Comparing the winner against the live config is a separate concern (CURRENT mode)."""
+    """AUTO-only consensus outcome. Comparing the winner against the live config
+    is a separate concern (CURRENT mode)."""
 
     converged: bool = False
     n_seeds_agreed: int = 0

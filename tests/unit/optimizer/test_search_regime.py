@@ -95,6 +95,8 @@ def test_regime_enabled_expands_search(monkeypatch) -> None:
     assert best["chop_enter_pct"] in (0.25, 0.50)
     assert best["chop_dead_band"] in (0.05, 0.10)
     assert best["trend_pct"] in (0.60, 0.70)
+    assert isinstance(best["train_ops"], int)
+    assert isinstance(best["test_ops"], int)
 
 
 def test_regime_enabled_no_global_mutation(monkeypatch) -> None:
@@ -169,6 +171,8 @@ def test_current_mode_with_regime(monkeypatch) -> None:
 
     assert result.n_trials_run == 1
     best = result.top_candidates[0]
+    assert isinstance(best["train_ops"], int)
+    assert isinstance(best["test_ops"], int)
     assert best["er_window"] == 24
     assert best["chop_enter_pct"] == 0.30
     assert best["chop_dead_band"] == 0.10
