@@ -214,3 +214,6 @@ api/requests.http
 
 # Local database dumps (e.g. pg_dump of ohlc_data for offline optimizer runs)
 *.sql
+
+# Optimizer calibration campaign results (filled copies of the template)
+docs/optimizer-calibration/results-*.md
